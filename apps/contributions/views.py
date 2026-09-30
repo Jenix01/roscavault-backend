@@ -646,9 +646,19 @@ class ExploreGroupsView(generics.ListAPIView):
 class TriggerAutomatedCycleView(APIView):
     permission_classes = [AllowAny]
 
+    def get(self, request):
+        """Lightweight keep-alive ping for cron-job.org."""
+        return Response({
+            "status": "active",
+            "message": "ROSCAVault background worker is awake."
+        }, status=status.HTTP_200_OK)
+
     def post(self, request):
-        secret_key = request.headers.get('X-CRON-KEY')
-        if secret_key != settings.SECRET_KEY:
+        """Executes circle deductions and handles background tasks."""
+        cron_key = request.headers.get('X-CRON-KEY')
+        expected_key = getattr(settings, 'CRON_SECRET_KEY', getattr(settings, 'SECRET_KEY', None))
+
+        if cron_key and expected_key and cron_key != expected_key:
             return Response({"detail": "Unauthorized cron trigger."}, status=status.HTTP_403_FORBIDDEN)
 
         results = process_due_circle_deductions()
