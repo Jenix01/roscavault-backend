@@ -9,6 +9,7 @@ import os
 import environ
 import dj_database_url
 from dotenv import load_dotenv
+from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -52,6 +53,14 @@ EMAIL_HOST_USER = os.environ.get('BREVO_SMTP_LOGIN')  # Your Brevo account email
 EMAIL_HOST_PASSWORD = os.environ.get('BREVO_SMTP_KEY')  # The master key generated in Brevo
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', f"ROSCAVault <{os.environ.get('BREVO_SMTP_LOGIN', 'noreply@roscavault.com')}>")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),      # Allow 24 hours for active sessions
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
 
 # ================= APPLICATION DEFINITION =================
 INSTALLED_APPS = [
