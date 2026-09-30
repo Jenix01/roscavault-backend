@@ -44,6 +44,14 @@ CSRF_TRUSTED_ORIGINS = [
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
 PREMBLY_API_KEY = os.getenv('PREMBLY_API_KEY', '')
 PREMBLY_APP_ID = os.getenv('PREMBLY_APP_ID', '')
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp-relay.brevo.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.environ.get('BREVO_SMTP_LOGIN')  # Your Brevo account email
+EMAIL_HOST_PASSWORD = os.environ.get('BREVO_SMTP_KEY')  # The master key generated in Brevo
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', f"ROSCAVault <{os.environ.get('BREVO_SMTP_LOGIN', 'noreply@roscavault.com')}>")
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # ================= APPLICATION DEFINITION =================
 INSTALLED_APPS = [

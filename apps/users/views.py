@@ -31,7 +31,8 @@ from .serializers import (
     ChangePasswordSerializer,
     UserPreferencesSerializer,
 )
-from .models import Notification
+from .models import Notification, TemporaryRegistrationVerification
+from .services import send_brevo_email_otp, send_phone_otp_or_test_fixture
 
 User = get_user_model()
 
@@ -760,3 +761,46 @@ class SubmitAddressTier2WithDocumentView(APIView):
             "tier": 2,
             "trust_score": user.trust_score
         }, status=status.HTTP_200_OK)
+        
+class RequestContactVerificationCodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        contact = request.data.get('contact', '').strip()
+        channel = request.data.get('channel')  # 'email' or 'phone'
+
+        if not contact or not channel:
+            return Response({"detail": "Both contact and channel ('email'|'phone') are required."}, status=400)
+
+        if channel == 'email':
+            if User.objects.filter(email__iexact=contact).exists():
+                return Response({"detail": "This email address is already registered."}, status=400)
+            try:
+                send_brevo_email_otp(contact)
+                return Response({"message": f"Verification code sent to {contact}."}, status=200)
+            except Exception as e:
+                return Response({"detail": f"Brevo email dispatch failed: {str(e)}"}, status=500)
+
+        elif channel == 'phone':
+            if User.objects.filter(phone_number=contact).exists():
+                return Response({"detail": "This phone number is already registered."}, status=400)
+            send_phone_otp_or_test_fixture(contact)
+            return Response({"message": f"Verification code dispatched for {contact}."}, status=200)
+
+        return Response({"detail": "Invalid channel specified."}, status=400)
+
+
+class ConfirmContactVerificationCodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        contact = request.data.get('contact', '').strip()
+        otp = request.data.get('otp', '').strip()
+
+        record = TemporaryRegistrationVerification.objects.filter(contact__iexact=contact, otp=otp).first()
+        if not record or record.is_expired():
+            return Response({"detail": "Invalid or expired verification code."}, status=400)
+
+        record.is_verified = True
+        record.save()
+        return Response({"message": f"{contact} verified successfully."}, status=200)
