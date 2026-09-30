@@ -16,6 +16,7 @@ from .views import (
     WalletContributionView,
     UserMembershipsAPIView,
     MyStatsView,
+    PaymentCallbackRedirectView,
     ExploreGroupsView,
     MyPayoutsView
 )
@@ -37,6 +38,7 @@ urlpatterns = [
     path('my-stats/', MyStatsView.as_view(), name='my-stats'),
     path('explore/', ExploreGroupsView.as_view(), name='explore-groups'),
     path('explore-groups/', ExploreGroupsView.as_view(), name='explore-groups-alias'),
+    path('payment/callback/', PaymentCallbackRedirectView.as_view(), name='payment-callback-redirect'),
     
     # Group Actions (Direct and Prefixed Routes)
     path('<uuid:group_id>/join/', JoinContributionGroupView.as_view(), name='join-group-direct'),

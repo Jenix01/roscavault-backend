@@ -12,7 +12,8 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from django.db import transaction as db_transaction
 from django.db.models import Sum, Q
-
+from django.shortcuts import redirect
+from django.views import View
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -32,6 +33,15 @@ from .serializers import (
 
 User = get_user_model()
 
+class PaymentCallbackRedirectView(View):
+    """
+    Receives Paystack's browser redirect and bounces the user back to the React Native app.
+    """
+    def get(self, request, *args, **kwargs):
+        reference = request.GET.get('reference', '') or request.GET.get('trxref', '')
+        # Deep links back to your mobile app
+        app_redirect_url = f"roscavault://payment-callback?reference={reference}"
+        return redirect(app_redirect_url)
 
 class ContributionGroupListCreateView(generics.ListCreateAPIView):
     serializer_class = ContributionGroupSerializer
@@ -419,20 +429,33 @@ class InitializePaymentView(APIView):
             "Content-Type": "application/json",
         }
         
-        callback_url = "roscavault://payment-callback"
+        # Paystack requires an https:// callback URL, not a direct custom scheme.
+        # It will redirect to this backend endpoint upon success, which bounces back to the app.
+        callback_url = "https://roscavault-api.onrender.com/api/contributions/payment/callback/"
+
+        # Paystack requires a valid email format with an existing domain structure (not .local)
+        user_email = (
+            request.user.email
+            if getattr(request.user, "email", None)
+            else f"user_{request.user.phone_number or request.user.id}@roscavault.com"
+        )
 
         payload = {
-            "email": request.user.email or f"{request.user.phone_number}@users.roscavault.local",
-            "amount": amount_kobo,
+            "email": user_email,
+            "amount": int(amount_kobo),
             "callback_url": callback_url,
             "metadata": {
-            "app_name": "ROSCAVault",
-            "user_id": str(request.user.id),
-            "custom_fields": [
-            {"display_name": "User Phone", "variable_name": "phone", "value": request.user.phone_number}
-        ]
-    }
-}
+                "app_name": "ROSCAVault",
+                "user_id": str(request.user.id),
+                "custom_fields": [
+                    {
+                        "display_name": "User Phone",
+                        "variable_name": "phone",
+                        "value": str(getattr(request.user, "phone_number", "")),
+                    }
+                ],
+            },
+        }
 
         try:
             paystack_res = requests.post(
