@@ -49,9 +49,12 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp-relay.brevo.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.environ.get('BREVO_SMTP_LOGIN')  # Your Brevo account email
-EMAIL_HOST_PASSWORD = os.environ.get('BREVO_SMTP_KEY')  # The master key generated in Brevo
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', f"ROSCAVault <{os.environ.get('BREVO_SMTP_LOGIN', 'noreply@roscavault.com')}>")
+
+# Explicitly bind to standard Django email settings
+EMAIL_HOST_USER = os.environ.get('BREVO_SMTP_LOGIN') or os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('BREVO_SMTP_KEY') or os.environ.get('EMAIL_HOST_PASSWORD', '')
+
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'ROSCAVault <no-reply@roscavault.com>')
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 SIMPLE_JWT = {
