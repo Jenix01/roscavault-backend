@@ -268,3 +268,33 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ['-created_at']   
+        
+class TemporaryRegistrationVerification(models.Model):
+    contact = models.CharField(max_length=255, unique=True, db_index=True)
+    otp = models.CharField(max_length=6)
+    is_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Temporary Registration Verification'
+        verbose_name_plural = 'Temporary Registration Verifications'
+
+    def __str__(self):
+        return f"{self.contact} - {self.otp} (Verified: {self.is_verified})"
+
+    def is_expired(self):
+        # Verification code remains valid for 10 minutes
+        return timezone.now() > self.created_at + timedelta(minutes=10)
+
+    @classmethod
+    def generate_otp(cls, contact):
+        code = f"{random.randint(100000, 999999)}"
+        obj, _ = cls.objects.update_or_create(
+            contact=contact.strip().lower(),
+            defaults={
+                "otp": code,
+                "is_verified": False,
+                "created_at": timezone.now(),
+            }
+        )
+        return code

@@ -40,7 +40,6 @@ urlpatterns = [
     path('kyc/submit-address-document/', SubmitAddressTier2WithDocumentView.as_view(), name='kyc-submit-address-doc'),
     path('kyc/status/', KYCStatusView.as_view(), name='kyc-status'),
     path('profile/', UserProfileView.as_view(), name='user-profile'),
-    path('profile/', UserProfileView.as_view(), name='user-profile'),
     path('change-password/', ChangePasswordView.as_view(), name='change-password'),
     path('auth/send-code/', RequestContactVerificationCodeView.as_view(), name='auth-send-code'),
     path('auth/verify-code/', ConfirmContactVerificationCodeView.as_view(), name='auth-verify-code'),
