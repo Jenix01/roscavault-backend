@@ -1,4 +1,5 @@
 import random
+import requests
 from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
@@ -13,11 +14,11 @@ FIREBASE_TEST_PHONE_WHITELIST = {
 }
 
 def send_brevo_email_otp(email: str) -> str:
-    """Dispatches a genuine 6-digit OTP directly to user inbox using Brevo SMTP."""
+    """Dispatches a genuine 6-digit OTP using Brevo's HTTPS API (bypasses SMTP port blocks)."""
     clean_email = email.strip().lower()
     otp_code = f"{random.randint(100000, 999999)}"
 
-    # Record or update token in database
+    # Store or update token in database
     TemporaryRegistrationVerification.objects.update_or_create(
         contact=clean_email,
         defaults={
@@ -27,20 +28,39 @@ def send_brevo_email_otp(email: str) -> str:
         }
     )
 
-    subject = f"{otp_code} is your ROSCAVault confirmation code"
-    body = (
-        f"Hello,\n\n"
-        f"Your ROSCAVault email verification code is: {otp_code}\n\n"
-        f"This code will expire in 10 minutes. If you did not request this, please ignore."
-    )
+    brevo_api_key = getattr(settings, 'BREVO_SMTP_KEY', None) or getattr(settings, 'BREVO_API_KEY', None)
+    
+    if not brevo_api_key:
+        raise Exception("Brevo API key is not configured in settings.")
 
-    send_mail(
-        subject=subject,
-        message=body,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[clean_email],
-        fail_silently=False,
-    )
+    url = "https://api.brevo.com/v3/smtp/email"
+    payload = {
+        "sender": {
+            "name": "ROSCAVault",
+            "email": getattr(settings, 'DEFAULT_FROM_EMAIL_ADDRESS', 'no-reply@roscavault.com')
+        },
+        "to": [{"email": clean_email}],
+        "subject": f"{otp_code} is your ROSCAVault confirmation code",
+        "htmlContent": f"""
+            <div style="font-family: Arial, sans-serif; padding: 20px;">
+                <h2>Welcome to ROSCAVault!</h2>
+                <p>Your email verification code is:</p>
+                <h1 style="color: #15803D; letter-spacing: 2px;">{otp_code}</h1>
+                <p>This code expires in 10 minutes. If you did not request this, please ignore.</p>
+            </div>
+        """
+    }
+    headers = {
+        "accept": "application/json",
+        "api-key": brevo_api_key,
+        "content-type": "application/json"
+    }
+
+    response = requests.post(url, json=payload, headers=headers, timeout=10)
+    
+    if response.status_code not in [200, 201]:
+        raise Exception(f"Brevo API error: {response.text}")
+
     return otp_code
 
 
