@@ -14,7 +14,7 @@ FIREBASE_TEST_PHONE_WHITELIST = {
 }
 
 def send_brevo_email_otp(email: str) -> str:
-    """Dispatches a genuine 6-digit OTP using Brevo's HTTPS API (bypasses SMTP port blocks)."""
+    """Dispatches a genuine 6-digit OTP using Brevo's HTTPS API."""
     clean_email = email.strip().lower()
     otp_code = f"{random.randint(100000, 999999)}"
 
@@ -28,16 +28,22 @@ def send_brevo_email_otp(email: str) -> str:
         }
     )
 
-    brevo_api_key = getattr(settings, 'BREVO_SMTP_KEY', None) or getattr(settings, 'BREVO_API_KEY', None)
+    # Directly check os.environ first, then settings fallbacks
+    brevo_api_key = (
+        os.environ.get('BREVO_API_KEY') or 
+        os.environ.get('BREVO_SMTP_KEY') or 
+        getattr(settings, 'BREVO_API_KEY', None) or 
+        getattr(settings, 'BREVO_SMTP_KEY', None)
+    )
     
     if not brevo_api_key:
-        raise Exception("Brevo API key is not configured in settings.")
+        raise Exception("Brevo API key is not configured in environment variables.")
 
     url = "https://api.brevo.com/v3/smtp/email"
     payload = {
         "sender": {
             "name": "ROSCAVault",
-            "email": getattr(settings, 'DEFAULT_FROM_EMAIL_ADDRESS', 'no-reply@roscavault.com')
+            "email": os.environ.get('DEFAULT_FROM_EMAIL', 'no-reply@roscavault.com').split('<')[-1].strip('>')
         },
         "to": [{"email": clean_email}],
         "subject": f"{otp_code} is your ROSCAVault confirmation code",
