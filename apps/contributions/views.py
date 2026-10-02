@@ -486,7 +486,41 @@ class InitializePaymentView(APIView):
         except requests.exceptions.RequestException as e:
             return Response({"detail": f"Paystack connection error: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
 
+class PaymentCallbackView(APIView):
+    permission_classes = [] # Allow unauthenticated public access since it's a browser redirect from Paystack
 
+    def get(self, request):
+        reference = request.GET.get('reference') or request.GET.get('trxref')
+        
+        if not reference:
+            return Response({"detail": "No reference provided."}, status=400)
+
+        # Verify transaction with Paystack server
+        headers = {
+            "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
+        }
+        
+        try:
+            res = requests.get(f"https://api.paystack.co/transaction/verify/{reference}", headers=headers, timeout=10).json()
+            
+            if res.get('status') and res['data']['status'] == 'success':
+                # Update your internal transaction record
+                transaction = Transaction.objects.filter(reference=reference).first()
+                if transaction:
+                    transaction.status = 'successful'
+                    transaction.save()
+                    
+                    # Optional: Update user wallet or contribution balance here
+                
+                # Redirect user to a success page or mobile deep link scheme
+                # e.g., "roscavault://payment-success?reference=" + reference
+                return redirect("https://roscavault.com/payment-success?reference=" + reference)
+            else:
+                return Response({"detail": "Payment verification failed or was abandoned."}, status=400)
+                
+        except Exception as e:
+            return Response({"detail": str(e)}, status=500)
+        
 class MyPayoutsView(APIView):
     """
     Returns all scheduled payouts for the authenticated user's active circles.

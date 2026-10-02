@@ -60,6 +60,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    kyc_tier = serializers.SerializerMethodField()
+    kyc_status = serializers.SerializerMethodField()
     trust_score = serializers.SerializerMethodField()
 
     class Meta:
@@ -86,10 +88,37 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'date_joined',
         )
 
+    def get_kyc_profile(self, obj):
+        # Helper to grab the related KYC profile safely whether it's a OneToOne or Reverse ForeignKey
+        try:
+            if hasattr(obj, 'kyc_profile'):
+                return obj.kyc_profile
+            return obj.userkycprofile_set.first()
+        except Exception:
+            return None
+
+    def get_kyc_tier(self, obj):
+        profile = self.get_kyc_profile(obj)
+        if profile and profile.tier:
+            return profile.tier
+        return "Tier 0 - Unverified"
+
+    def get_kyc_status(self, obj):
+        profile = self.get_kyc_profile(obj)
+        if profile:
+            # Return 'verified' if face and address/BVN are verified, or check a status field
+            if getattr(profile, 'face_verified', False):
+                return 'verified'
+        return 'unverified'
+
     def get_trust_score(self, obj):
-        # Return a score based on KYC status
-        if getattr(obj, 'kyc_status', '') == 'verified':
-            return 85
+        profile = self.get_kyc_profile(obj)
+        if profile and profile.tier:
+            tier_str = str(profile.tier)
+            if "Tier 2" in tier_str or "Tier 3" in tier_str:
+                return 85
+            elif "Tier 1" in tier_str:
+                return 70
         return 50
         
 class ChangePasswordSerializer(serializers.Serializer):
