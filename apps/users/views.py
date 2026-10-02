@@ -486,21 +486,6 @@ class KYCStatusView(APIView):
         }, status=status.HTTP_200_OK) 
         
 class UserProfileView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-        return Response({
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "phone_number": getattr(user, 'phone_number', ''),
-            "trust_score": getattr(user, 'trust_score', 70),
-        }, status=status.HTTP_200_OK)
-        
-class UserProfileView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -513,7 +498,6 @@ class UserProfileView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class ChangePasswordView(APIView):
     permission_classes = [permissions.IsAuthenticated]
