@@ -1,7 +1,7 @@
-import random, os
+import random
+import os
 import requests
 from django.conf import settings
-from django.core.mail import send_mail
 from django.utils import timezone
 from .models import TemporaryRegistrationVerification
 
@@ -40,10 +40,17 @@ def send_brevo_email_otp(email: str) -> str:
         raise Exception("Brevo API key is not configured in environment variables.")
 
     url = "https://api.brevo.com/v3/smtp/email"
+    
+    # Safely clean and parse the sender email to avoid unverified domain rejections
+    raw_sender = os.environ.get('DEFAULT_FROM_EMAIL', 'bbdd5b001@smtp-brevo.com')
+    clean_sender = raw_sender.replace('<', '').replace('>', '').strip()
+    if '@roscavault.com' in clean_sender:
+        clean_sender = 'bbdd5b001@smtp-brevo.com'  # Fallback to verified smtp user if domain isn't authenticated
+
     payload = {
         "sender": {
             "name": "ROSCAVault",
-            "email": os.environ.get('DEFAULT_FROM_EMAIL', 'no-reply@roscavault.com').split('<')[-1].strip('>')
+            "email": clean_sender
         },
         "to": [{"email": clean_email}],
         "subject": f"{otp_code} is your ROSCAVault confirmation code",
@@ -103,7 +110,6 @@ def send_phone_otp_or_test_fixture(phone_number: str) -> str:
     # Dispatch to live SMS provider if configured
     termii_key = getattr(settings, 'TERMII_API_KEY', None)
     if termii_key:
-        import requests
         formatted_phone = clean_phone if clean_phone.startswith('+') else f"+234{clean_phone.lstrip('0')}"
         try:
             requests.post(
