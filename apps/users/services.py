@@ -42,7 +42,7 @@ def send_brevo_email_otp(email: str) -> str:
     url = "https://api.brevo.com/v3/smtp/email"
     
     # Safely clean and parse the sender email to avoid unverified domain rejections
-    raw_sender = os.environ.get('DEFAULT_FROM_EMAIL', 'bbdd5b001@smtp-brevo.com')
+    raw_sender = os.environ.get('DEFAULT_FROM_EMAIL', 'ojenikebabajidejoshua@gmail.com')
     clean_sender = raw_sender.replace('<', '').replace('>', '').strip()
     if '@roscavault.com' in clean_sender:
         clean_sender = 'bbdd5b001@smtp-brevo.com'  # Fallback to verified smtp user if domain isn't authenticated
