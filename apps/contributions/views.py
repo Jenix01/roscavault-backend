@@ -5,7 +5,7 @@ import requests
 import uuid
 from decimal import Decimal
 from datetime import date, timedelta
-
+from django.http import HttpResponse
 from django.conf import settings
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -487,7 +487,7 @@ class InitializePaymentView(APIView):
             return Response({"detail": f"Paystack connection error: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
 
 class PaymentCallbackView(APIView):
-    permission_classes = [] # Allow unauthenticated public access since it's a browser redirect from Paystack
+    permission_classes = []  # Public access for Paystack browser redirect
 
     def get(self, request):
         reference = request.GET.get('reference') or request.GET.get('trxref')
@@ -495,7 +495,6 @@ class PaymentCallbackView(APIView):
         if not reference:
             return Response({"detail": "No reference provided."}, status=400)
 
-        # Verify transaction with Paystack server
         headers = {
             "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}",
         }
@@ -504,22 +503,46 @@ class PaymentCallbackView(APIView):
             res = requests.get(f"https://api.paystack.co/transaction/verify/{reference}", headers=headers, timeout=10).json()
             
             if res.get('status') and res['data']['status'] == 'success':
-                # Update your internal transaction record
                 transaction = Transaction.objects.filter(reference=reference).first()
-                if transaction:
+                
+                if transaction and transaction.status != 'successful':
+                    # 1. Update transaction status
                     transaction.status = 'successful'
                     transaction.save()
                     
-                    # Optional: Update user wallet or contribution balance here
+                    # 2. Credit user wallet (uncomment and adjust import if Wallet model is imported)
+                    # wallet, created = Wallet.objects.get_or_create(user=transaction.user)
+                    # wallet.balance += transaction.amount
+                    # wallet.save()
                 
-                # Redirect user to a success page or mobile deep link scheme
-                # e.g., "roscavault://payment-success?reference=" + reference
-                return redirect("https://roscavault.com/payment-success?reference=" + reference)
+                # 3. Return clean success page so the browser doesn't throw a DNS/404 error
+                return HttpResponse("""
+                    <html>
+                        <head>
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>Payment Successful</title>
+                        </head>
+                        <body style="font-family: Arial, sans-serif; text-align: center; padding-top: 60px; background-color: #f8fafc;">
+                            <div style="max-width: 400px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                                <h1 style="color: #15803D; margin-bottom: 10px;">Payment Successful!</h1>
+                                <p style="color: #475569; font-size: 16px;">Your transaction was verified and your wallet has been funded successfully.</p>
+                                <p style="color: #94a3b8; font-size: 14px; margin-top: 20px;">You can now close this tab and return to ROSCAVault.</p>
+                            </div>
+                        </body>
+                    </html>
+                """)
             else:
-                return Response({"detail": "Payment verification failed or was abandoned."}, status=400)
+                return HttpResponse("""
+                    <html>
+                        <body style="font-family: Arial; text-align: center; padding-top: 60px;">
+                            <h1 style="color: #DC2626;">Payment Verification Failed</h1>
+                            <p>The transaction could not be verified or was cancelled.</p>
+                        </body>
+                    </html>
+                """, status=400)
                 
         except Exception as e:
-            return Response({"detail": str(e)}, status=500)
+            return HttpResponse(f"Error processing payment: {str(e)}", status=500)
         
 class MyPayoutsView(APIView):
     """
