@@ -57,7 +57,7 @@ urlpatterns = [
     path('cron/process-cycles/', TriggerAutomatedCycleView.as_view(), name='process-cycles-cron'),
 
     # Payment Gateway Handlers
-    path('payment/initialize/', InitializePaymentView.as_view(), name='payment-initialize'),
+    path('payment/initialize/', InitializePaymentView.as_view(), name='initialize-payment'),
     path('payment/verify/<str:reference>/', VerifyPaymentView.as_view(), name='verify-payment'),
     path('payment/webhook/', PaymentWebhookView.as_view(), name='payment-webhook'),
 
