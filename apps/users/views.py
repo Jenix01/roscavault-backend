@@ -30,7 +30,11 @@ from .serializers import (
     UserProfileSerializer,
     ChangePasswordSerializer,
     UserPreferencesSerializer,
+    SendCodeSerializer, 
+    VerifyCodeSerializer, 
+    CompleteRegistrationSerializer
 )
+
 from .models import Notification, TemporaryRegistrationVerification
 from .services import send_brevo_email_otp, send_phone_otp_or_test_fixture
 
@@ -126,6 +130,59 @@ class VerifyOTPView(APIView):
             "verification_token": str(record.id)
         }, status=status.HTTP_200_OK)
 
+class SendVerificationCodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = SendCodeSerializer(data=request.data)
+        if serializer.is_valid():
+            contact = serializer.validated_data["contact"]
+            try:
+                send_brevo_email_otp(contact)
+                return Response(
+                    {"message": f"Verification code sent to {contact}."},
+                    status=status.HTTP_200_OK
+                )
+            except Exception as e:
+                return Response(
+                    {"detail": f"Email dispatch failed: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VerifyCodeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = VerifyCodeSerializer(data=request.data)
+        if serializer.is_valid():
+            verification = serializer.validated_data["verification"]
+            verification.is_verified = True
+            verification.save()
+
+            return Response(
+                {"message": "Email successfully verified. You can now complete your registration."},
+                status=status.HTTP_200_OK
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CompleteRegistrationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = CompleteRegistrationSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response(
+                {
+                    "message": "Account created successfully.",
+                    "email": user.email
+                },
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class CompleteOnboardingRegistrationView(APIView):
     permission_classes = [AllowAny]

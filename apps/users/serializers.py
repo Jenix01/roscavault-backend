@@ -3,7 +3,7 @@ from django.db.models import Q
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth.password_validation import validate_password
-from .models import User, Wallet, WithdrawalRequest, InvestmentLock
+from .models import User, Wallet, WithdrawalRequest, InvestmentLock, TemporaryRegistrationVerification
 
 User = get_user_model()
 
@@ -168,3 +168,75 @@ class WithdrawalRequestSerializer(serializers.ModelSerializer):
                 )
 
         return data
+    
+class SendCodeSerializer(serializers.Serializer):
+    contact = serializers.EmailField()
+    channel = serializers.CharField(default="email")
+
+    def validate_contact(self, value):
+        email = value.strip().lower()
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError("An account with this email address already exists.")
+        return email
+
+
+class VerifyCodeSerializer(serializers.Serializer):
+    contact = serializers.EmailField()
+    otp = serializers.CharField(max_length=6, min_length=6)
+
+    def validate(self, attrs):
+        email = attrs.get("contact").strip().lower()
+        otp_code = attrs.get("otp").strip()
+
+        try:
+            verification = TemporaryRegistrationVerification.objects.get(contact=email)
+        except TemporaryRegistrationVerification.DoesNotExist:
+            raise serializers.ValidationError({"detail": "No verification code requested for this email."})
+
+        if verification.is_expired():
+            raise serializers.ValidationError({"detail": "Verification code has expired. Please request a new one."})
+
+        if verification.otp != otp_code:
+            raise serializers.ValidationError({"detail": "Invalid verification code."})
+
+        # Attach verification instance for use in view
+        attrs["verification"] = verification
+        return attrs
+
+
+class CompleteRegistrationSerializer(serializers.ModelSerializer):
+    contact = serializers.EmailField(write_only=True)
+    password = serializers.CharField(write_only=True, min_length=8)
+
+    class Meta:
+        model = User
+        fields = ["email", "password", "contact", "first_name", "last_name"]
+        extra_kwargs = {"email": {"read_only": True}}
+
+    def validate(self, attrs):
+        contact = attrs.get("contact")
+        try:
+            verification = TemporaryRegistrationVerification.objects.get(contact=contact)
+        except TemporaryRegistrationVerification.DoesNotExist:
+            raise serializers.ValidationError({"detail": "Verification record not found."})
+
+        if not verification.is_verified:
+            raise serializers.ValidationError({"detail": "Email address has not been verified yet."})
+
+        return attrs
+
+    def create(self, validated_data):
+        contact = validated_data.pop("contact")
+        password = validated_data.pop("password")
+        
+        # Create user account
+        user = User.objects.create_user(
+            email=contact,
+            username=contact,
+            password=password,
+            **validated_data
+        )
+
+        # Cleanup verification record after successful signup
+        TemporaryRegistrationVerification.objects.filter(contact=contact).delete()
+        return user
