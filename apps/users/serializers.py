@@ -101,7 +101,6 @@ class UserProfileSerializer(serializers.ModelSerializer):
         profile = self.get_kyc_profile(obj)
         if profile and profile.tier:
             tier_str = str(profile.tier)
-            # Normalize to match what the mobile app expects ("Tier 2", "Tier 1", etc.)
             if "2" in tier_str or "Medium" in tier_str:
                 return "Tier 2"
             elif "1" in tier_str or "Basic" in tier_str:
