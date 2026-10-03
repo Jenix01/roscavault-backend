@@ -93,25 +93,42 @@ class JoinContributionGroupView(generics.CreateAPIView):
         if group.memberships.count() >= group.max_members:
             return Response({"detail": "Sorry, this AJO group is already at maximum capacity."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # 1. Find the lowest available slot number (Gap-filling logic)
+        existing_positions = GroupMembership.objects.filter(
+            group=group, status='approved'
+        ).values_list('current_cycle_number', flat=True)
+
+        assigned_slot = 1
+        for i in range(1, group.max_members + 1):
+            if i not in existing_positions:
+                assigned_slot = i
+                break
+
+        # 2. Create Membership with the correct gap-filled slot
         membership = GroupMembership.objects.create(
             user=request.user,
             group=group,
             role='member',
-            current_cycle_number=1,
+            status='approved',
+            current_cycle_number=assigned_slot,
             is_active=True,
             next_deadline=timezone.now()
         )
 
-        assigned_turn = group.memberships.count()
+        # 3. Schedule Payout matching the exact assigned slot
         days_offset = 1 if group.cycle_frequency == 'daily' else (7 if group.cycle_frequency == 'weekly' else 30)
-        net_pot = (group.amount * group.max_members * Decimal('0.95')).quantize(Decimal('0.01'))
+        
+        # 2% Alajo fee calculation (Net Pot = 98%)
+        net_pot = (Decimal(str(group.amount)) * Decimal(str(group.max_members)) * Decimal('0.98')).quantize(Decimal('0.01'))
+
+        base_date = group.start_date if hasattr(group, 'start_date') and group.start_date else timezone.now().date()
 
         PayoutSchedule.objects.get_or_create(
             group=group,
             member=membership,
-            cycle_number=assigned_turn,
+            cycle_number=assigned_slot,
             defaults={
-                'expected_payout_date': (timezone.now() + timedelta(days=days_offset * assigned_turn)).date(),
+                'expected_payout_date': base_date + timedelta(days=days_offset * (assigned_slot - 1)),
                 'payout_amount': net_pot,
                 'status': 'pending'
             }
@@ -1007,14 +1024,9 @@ class CreateContributionGroupView(APIView):
                     is_active=True
                 )
                 
-            # Inside your group join / membership creation logic:
-                existing_positions = GroupMembership.objects.filter(group=group, status='approved').values_list('current_cycle_number', flat=True)
-            
-                available_slot = 1
-                for i in range(1, group.max_members + 1):
-                    if i not in existing_positions:
-                        available_slot = i
-                        break
+                # If creator joins as a member, respect their chosen pot_number (slot)
+                # If they manage without joining, we assign role admin
+                creator_slot = pot_number if join_as_member else 1
 
                 GroupMembership.objects.create(
                     user=user,
@@ -1022,7 +1034,7 @@ class CreateContributionGroupView(APIView):
                     role='admin',
                     status='approved',
                     is_active=True,
-                    current_cycle_number=pot_number if join_as_member else 1
+                    current_cycle_number=creator_slot
                 )
 
             return Response(
