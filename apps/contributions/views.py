@@ -1058,49 +1058,32 @@ class CreatorGroupManagementDetailsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, group_id):
-        group = get_object_or_404(ContributionGroup, id=group_id)
+        try:
+            group = get_object_or_404(ContributionGroup, id=group_id)
+            
+            # Ensure only creator or admin can view management details
+            if group.creator != request.user and not GroupMembership.objects.filter(group=group, user=request.user, role='admin').exists():
+                return Response({"detail": "Permission denied. Only circle creators can manage this group."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Confirm ownership
-        if group.creator != request.user:
+            members = GroupMembership.objects.filter(group=group, status='approved')
+            pending_applicants = GroupMembership.objects.filter(group=group, status='pending')
+
+            serializer = GroupMembershipSerializer(members, many=True)
+            pending_serializer = GroupMembershipSerializer(pending_applicants, many=True)
+
+            data = {
+                "group": ContributionGroupSerializer(group).data,
+                "members": serializer.data,
+                "pending_applicants": pending_serializer.data,
+                "pending_applicants_count": pending_applicants.count()
+            }
+            return Response(data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            print("CREATOR MANAGEMENT 500 ERROR:\n", error_trace)
             return Response(
-                {"detail": "Access restricted: Only the circle creator can manage this group."},
-                status=status.HTTP_403_FORBIDDEN
+                {"detail": str(e), "traceback": error_trace},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-        memberships = GroupMembership.objects.filter(
-            group=group,
-            status='approved'
-        ).select_related('user').order_by('current_cycle_number')
-
-        pending_count = GroupMembership.objects.filter(
-            group=group,
-            status='pending'
-        ).count()
-
-        members_data = []
-        for m in memberships:
-            u = m.user
-            full_name = f"{u.first_name} {u.last_name}".strip() if u.first_name else (u.username or u.email)
-            members_data.append({
-                "id": m.id,
-                "user_id": u.id,
-                "name": full_name,
-                "role": m.role,
-                "trust_score": getattr(u, 'trust_score', 100),
-                "is_active": m.is_active,
-                "cycle_number": m.current_cycle_number,
-            })
-
-        return Response({
-            "group": {
-                "id": group.id,
-                "name": group.name,
-                "amount": float(group.amount),
-                "max_members": group.max_members,
-                "cycle_frequency": group.cycle_frequency,
-                "start_date": str(group.start_date) if hasattr(group, 'start_date') and group.start_date else None,
-                "is_active": group.is_active,
-            },
-            "members": members_data,
-            "pending_applicants_count": pending_count,
-        }, status=status.HTTP_200_OK)
