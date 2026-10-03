@@ -928,113 +928,110 @@ class CreateContributionGroupView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        user = request.user
-        
-        # 1. Fetch Tier & Score Values
-        user_tier = getattr(user, 'tier', 0)
-        user_kyc_tier = getattr(user, 'kyc_tier', 0)
-        trust_score = getattr(user, 'trust_score', 0) or 100
-        is_verified = getattr(user, 'is_kyc_verified', False)
-
-        # FIXED: Directly query UserKYCProfile instead of relying on broken relation lookup
-        kyc_record_tier = 0
         try:
-            profile_obj = UserKYCProfile.objects.filter(user=user).first()
-            if profile_obj:
-                kyc_record_tier = int(getattr(profile_obj, 'tier', 0) or 0)
-        except Exception:
-            pass
+            user = request.user
+            
+            # 1. Fetch Tier & Score Values
+            user_tier = getattr(user, 'tier', 0)
+            user_kyc_tier = getattr(user, 'kyc_tier', 0)
+            trust_score = getattr(user, 'trust_score', 0) or 100
+            is_verified = getattr(user, 'is_kyc_verified', False)
 
-        # Force terminal logging so you see every attempt
-        print(f"\n==========================================")
-        print(f"[GATE INSPECT] User: {user.email or user.username}")
-        print(f"tier: {user_tier} | kyc_tier: {user_kyc_tier} | kyc_record_tier: {kyc_record_tier}")
-        print(f"trust_score: {trust_score} | is_kyc_verified: {is_verified}")
-        print(f"==========================================\n")
-
-        # 2. STRICT TIER 2 ENFORCEMENT
-        effective_tier = max(
-            int(user_tier or 0), 
-            int(user_kyc_tier or 0), 
-            int(kyc_record_tier or 0)
-        )
-
-        if effective_tier < 2:
-            return Response(
-                {
-                    "detail": f"Creator Eligibility: Circle creators must be in Tier 2 (Verified Residential Address). Your account is currently Tier {effective_tier}.",
-                    "requires_tier2": True,
-                    "current_tier": effective_tier
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        # 3. STRICT TRUST SCORE ENFORCEMENT (>= 70)
-        if int(trust_score or 0) < 70:
-            return Response(
-                {
-                    "detail": f"Creator Eligibility: A minimum Trust Score of 70 is required to manage an Ajo circle. Your current score is {trust_score}%.",
-                    "requires_trust_score": True,
-                    "current_score": trust_score
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        # 4. Circle Creation Payload Handling
-        name = request.data.get('name', '').strip()
-        amount = request.data.get('amount')
-        max_members = int(request.data.get('max_members', 5))
-        cycle_frequency = request.data.get('cycle_frequency', 'monthly')
-        join_as_member = request.data.get('join_as_member', False)
-        pot_number = int(request.data.get('pot_number', 1)) # Captured user slot selection
-        
-        # Creator determines the starting day (defaults to today if not provided)
-        start_date_str = request.data.get('start_date')
-        if start_date_str:
+            kyc_record_tier = 0
             try:
-                start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date()
-            except ValueError:
+                profile_obj = UserKYCProfile.objects.filter(user=user).first()
+                if profile_obj:
+                    kyc_record_tier = int(getattr(profile_obj, 'tier', 0) or 0)
+            except Exception:
+                pass
+
+            effective_tier = max(
+                int(user_tier or 0), 
+                int(user_kyc_tier or 0), 
+                int(kyc_record_tier or 0)
+            )
+
+            if effective_tier < 2:
                 return Response(
-                    {"detail": "Invalid start_date format. Use YYYY-MM-DD."},
+                    {
+                        "detail": f"Creator Eligibility: Circle creators must be in Tier 2 (Verified Residential Address). Your account is currently Tier {effective_tier}.",
+                        "requires_tier2": True,
+                        "current_tier": effective_tier
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            if int(trust_score or 0) < 70:
+                return Response(
+                    {
+                        "detail": f"Creator Eligibility: A minimum Trust Score of 70 is required to manage an Ajo circle. Your current score is {trust_score}%.",
+                        "requires_trust_score": True,
+                        "current_score": trust_score
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            name = request.data.get('name', '').strip()
+            amount = request.data.get('amount')
+            max_members = int(request.data.get('max_members', 5))
+            cycle_frequency = request.data.get('cycle_frequency', 'monthly')
+            join_as_member = request.data.get('join_as_member', False)
+            pot_number = int(request.data.get('pot_number', 1))
+            
+            start_date_str = request.data.get('start_date')
+            if start_date_str:
+                try:
+                    start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    return Response(
+                        {"detail": "Invalid start_date format. Use YYYY-MM-DD."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                start_date = timezone.now().date()
+
+            if not name or not amount:
+                return Response(
+                    {"detail": "Circle name and contribution amount are required."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-        else:
-            start_date = timezone.now().date()
 
-        if not name or not amount:
+            with db_transaction.atomic():
+                group = ContributionGroup.objects.create(
+                    name=name,
+                    creator=user,
+                    amount=amount,
+                    max_members=max_members,
+                    cycle_frequency=cycle_frequency,
+                    start_date=start_date,
+                    is_active=True
+                )
+
+                GroupMembership.objects.create(
+                    user=user,
+                    group=group,
+                    role='admin',
+                    status='approved',
+                    is_active=True,
+                    current_cycle_number=pot_number if join_as_member else 1
+                )
+
             return Response(
-                {"detail": "Circle name and contribution amount are required."},
-                status=status.HTTP_400_BAD_REQUEST
+                {
+                    "detail": "Circle created successfully.",
+                    "group_id": group.id,
+                    "start_date": str(group.start_date)
+                },
+                status=status.HTTP_201_CREATED
             )
-
-        with db_transaction.atomic():
-            group = ContributionGroup.objects.create(
-                name=name,
-                creator=user,
-                amount=amount,
-                max_members=max_members,
-                cycle_frequency=cycle_frequency,
-                start_date=start_date,
-                is_active=True
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            print("SERVER 500 ERROR TRACEBACK:\n", error_trace)
+            return Response(
+                {"detail": str(e), "traceback": error_trace},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-            GroupMembership.objects.create(
-                user=user,
-                group=group,
-                role='admin',
-                status='approved',
-                is_active=True,
-                current_cycle_number=pot_number if join_as_member else 1
-            )
-
-        return Response(
-            {
-                "detail": "Circle created successfully.",
-                "group_id": group.id,
-                "start_date": str(group.start_date)
-            },
-            status=status.HTTP_201_CREATED
-        )
         
 class CreatorGroupManagementDetailsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
