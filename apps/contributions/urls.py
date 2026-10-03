@@ -28,10 +28,10 @@ urlpatterns = [
     # Gated Circle Creation View (Strict Tier 2 & Trust Score Enforcement)
     path('create/', CreateContributionGroupView.as_view(), name='create-circle'),
     
-    # Creator Management Details (Supports both naming patterns to prevent loading errors)
-    path('groups/<int:group_id>/details/', CreatorGroupManagementDetailsView.as_view(), name='creator-group-details'),
-    path('groups/<int:group_id>/manage/', CreatorGroupManagementDetailsView.as_view(), name='creator-group-manage'),
-    path('creator-groups/<int:group_id>/', CreatorGroupManagementDetailsView.as_view(), name='creator-group-detail-alt'),
+    # Creator Management Details (Fixed to accept UUIDs)
+    path('groups/<uuid:group_id>/details/', CreatorGroupManagementDetailsView.as_view(), name='creator-group-details'),
+    path('groups/<uuid:group_id>/manage/', CreatorGroupManagementDetailsView.as_view(), name='creator-group-manage'),
+    path('creator-groups/<uuid:group_id>/', CreatorGroupManagementDetailsView.as_view(), name='creator-group-detail-alt'),
     
     # Group Listing & Memberships
     path('groups/', ContributionGroupListCreateView.as_view(), name='groups-list-create'),
