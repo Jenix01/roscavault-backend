@@ -100,8 +100,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
     def get_kyc_tier(self, obj):
         profile = self.get_kyc_profile(obj)
         if profile and profile.tier:
-            return profile.tier
-        return "Tier 0 - Unverified"
+            tier_str = str(profile.tier)
+            # Normalize to match what the mobile app expects ("Tier 2", "Tier 1", etc.)
+            if "2" in tier_str or "Medium" in tier_str:
+                return "Tier 2"
+            elif "1" in tier_str or "Basic" in tier_str:
+                return "Tier 1"
+            elif "3" in tier_str or "Full" in tier_str:
+                return "Tier 3"
+        return "Tier 0"
 
     def get_kyc_status(self, obj):
         profile = self.get_kyc_profile(obj)
