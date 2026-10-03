@@ -36,6 +36,11 @@ class ContributionGroup(AbstractBaseModel):
         help_text="The day of the week or month the deadline falls on."
     )
     
+    start_date = models.DateField(default=timezone.now)
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
     daily_fine_percentage = models.DecimalField(
         max_digits=5, 
         decimal_places=2, 
