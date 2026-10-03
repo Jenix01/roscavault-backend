@@ -1006,6 +1006,15 @@ class CreateContributionGroupView(APIView):
                     start_date=start_date,
                     is_active=True
                 )
+                
+            # Inside your group join / membership creation logic:
+                existing_positions = GroupMembership.objects.filter(group=group, status='approved').values_list('current_cycle_number', flat=True)
+            
+                available_slot = 1
+                for i in range(1, group.max_members + 1):
+                    if i not in existing_positions:
+                        available_slot = i
+                        break
 
                 GroupMembership.objects.create(
                     user=user,
