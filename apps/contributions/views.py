@@ -510,12 +510,12 @@ class PaymentCallbackView(APIView):
                     transaction.status = 'successful'
                     transaction.save()
                     
-                    # 2. Credit user wallet (uncomment and adjust import if Wallet model is imported)
-                    # wallet, created = Wallet.objects.get_or_create(user=transaction.user)
-                    # wallet.balance += transaction.amount
-                    # wallet.save()
+                    # 2. Credit the user's wallet
+                    wallet, created = Wallet.objects.get_or_create(user=transaction.user)
+                    wallet.balance += transaction.amount
+                    wallet.save()
                 
-                # 3. Return clean success page so the browser doesn't throw a DNS/404 error
+                # 3. Return clean success page
                 return HttpResponse("""
                     <html>
                         <head>
@@ -532,18 +532,10 @@ class PaymentCallbackView(APIView):
                     </html>
                 """)
             else:
-                return HttpResponse("""
-                    <html>
-                        <body style="font-family: Arial; text-align: center; padding-top: 60px;">
-                            <h1 style="color: #DC2626;">Payment Verification Failed</h1>
-                            <p>The transaction could not be verified or was cancelled.</p>
-                        </body>
-                    </html>
-                """, status=400)
+                return HttpResponse("Payment verification failed.", status=400)
                 
         except Exception as e:
-            return HttpResponse(f"Error processing payment: {str(e)}", status=500)
-        
+            return HttpResponse(f"Error: {str(e)}", status=500)
 class MyPayoutsView(APIView):
     """
     Returns all scheduled payouts for the authenticated user's active circles.
