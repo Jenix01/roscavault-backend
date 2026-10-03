@@ -62,9 +62,9 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
         return None
 
     def get_dues_paid_count(self, obj):
-        # Count successful contributions made by this user for this group to advance rounds
-        from .models import ContributionTransaction
-        return ContributionTransaction.objects.filter(
+        # Count successful contributions using your actual model name (e.g. Transaction or ContributionPayment)
+        from .models import Transaction # Change to match your exact model name in models.py if different
+        return Transaction.objects.filter(
             user=obj.user,
             group=obj.group,
             status='successful'
