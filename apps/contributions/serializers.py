@@ -31,6 +31,7 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
     # Collection turn milestones
     assigned_cycle_number = serializers.SerializerMethodField()
     expected_collection_date = serializers.SerializerMethodField()
+    dues_paid_count = serializers.SerializerMethodField()
 
     class Meta:
         model = GroupMembership
@@ -41,6 +42,7 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
             'current_cycle_number',
             'assigned_cycle_number',
             'expected_collection_date',
+            'dues_paid_count',
             'next_deadline',
             'is_active',
             'user_email',
@@ -58,6 +60,15 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
         if payout and payout.expected_payout_date:
             return payout.expected_payout_date.strftime("%d %b %Y")
         return None
+
+    def get_dues_paid_count(self, obj):
+        # Count successful contributions made by this user for this group to advance rounds
+        from .models import ContributionTransaction
+        return ContributionTransaction.objects.filter(
+            user=obj.user,
+            group=obj.group,
+            status='successful'
+        ).count()
 
 
 class TransactionSerializer(serializers.ModelSerializer):
