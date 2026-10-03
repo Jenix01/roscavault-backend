@@ -1085,9 +1085,16 @@ class CreatorGroupManagementDetailsView(APIView):
         try:
             group = get_object_or_404(ContributionGroup, id=group_id)
             
-            # Ensure only creator or admin can view management details
-            if group.creator != request.user and not GroupMembership.objects.filter(group=group, user=request.user, role='admin').exists():
-                return Response({"detail": "Permission denied. Only circle creators can manage this group."}, status=status.HTTP_403_FORBIDDEN)
+            # Verify creator or admin access
+            is_host = group.creator == request.user or GroupMembership.objects.filter(
+                group=group, user=request.user, role='admin'
+            ).exists()
+
+            if not is_host:
+                return Response(
+                    {"detail": "Permission denied. Only circle creators can manage this group."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
             members = GroupMembership.objects.filter(group=group, status='approved')
             pending_applicants = GroupMembership.objects.filter(group=group, status='pending')
@@ -1106,7 +1113,9 @@ class CreatorGroupManagementDetailsView(APIView):
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
-            print("CREATOR MANAGEMENT 500 ERROR:\n", error_trace)
+            print("--- CREATOR MANAGEMENT 500 ERROR TRACEBACK ---")
+            print(error_trace)
+            print("---------------------------------------------")
             return Response(
                 {"detail": str(e), "traceback": error_trace},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
