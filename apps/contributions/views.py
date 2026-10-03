@@ -21,7 +21,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework import status, permissions
 
 from .models import ContributionGroup, GroupMembership, Transaction, PayoutSchedule
-from users.models import Wallet
+from users.models import Wallet, UserKYCProfile
 from .services import process_due_circle_deductions
 from .serializers import (
     ContributionGroupSerializer,
@@ -933,13 +933,17 @@ class CreateContributionGroupView(APIView):
         # 1. Fetch Tier & Score Values
         user_tier = getattr(user, 'tier', 0)
         user_kyc_tier = getattr(user, 'kyc_tier', 0)
-        trust_score = getattr(user, 'trust_score', 0)
+        trust_score = getattr(user, 'trust_score', 0) or 100
         is_verified = getattr(user, 'is_kyc_verified', False)
 
-        # Look into related KYC record if one exists
+        # FIXED: Directly query UserKYCProfile instead of relying on broken relation lookup
         kyc_record_tier = 0
-        if hasattr(user, 'kyc'):
-            kyc_record_tier = getattr(user.kyc, 'tier', 0)
+        try:
+            profile_obj = UserKYCProfile.objects.filter(user=user).first()
+            if profile_obj:
+                kyc_record_tier = int(getattr(profile_obj, 'tier', 0) or 0)
+        except Exception:
+            pass
 
         # Force terminal logging so you see every attempt
         print(f"\n==========================================")
@@ -982,6 +986,7 @@ class CreateContributionGroupView(APIView):
         max_members = int(request.data.get('max_members', 5))
         cycle_frequency = request.data.get('cycle_frequency', 'monthly')
         join_as_member = request.data.get('join_as_member', False)
+        pot_number = int(request.data.get('pot_number', 1)) # Captured user slot selection
         
         # Creator determines the starting day (defaults to today if not provided)
         start_date_str = request.data.get('start_date')
@@ -1009,7 +1014,7 @@ class CreateContributionGroupView(APIView):
                 amount=amount,
                 max_members=max_members,
                 cycle_frequency=cycle_frequency,
-                start_date=start_date, # Allows creator to determine starting day
+                start_date=start_date,
                 is_active=True
             )
 
@@ -1019,7 +1024,7 @@ class CreateContributionGroupView(APIView):
                 role='admin',
                 status='approved',
                 is_active=True,
-                current_cycle_number=1
+                current_cycle_number=pot_number if join_as_member else 1
             )
 
         return Response(
@@ -1075,7 +1080,7 @@ class CreatorGroupManagementDetailsView(APIView):
                 "amount": float(group.amount),
                 "max_members": group.max_members,
                 "cycle_frequency": group.cycle_frequency,
-                "start_date": str(group.start_date) if hasattr(group, 'start_date') and group.start_date else None, # Added start_date response
+                "start_date": str(group.start_date) if hasattr(group, 'start_date') and group.start_date else None,
                 "is_active": group.is_active,
             },
             "members": members_data,
