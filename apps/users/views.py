@@ -472,17 +472,44 @@ class SubmitKYCView(APIView):
 
 class KYCStatusView(APIView):
     """
-    Returns the user's current verification tier, limit, and status.
+    Returns the user's current verification tier, limits, and profile status
+    fully aligned with the UserKYCProfile backend records.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
+        profile, _ = UserKYCProfile.objects.get_or_create(user=user)
+
+        # Synchronize base user tier with profile tier if out of sync
+        current_tier = getattr(profile, 'tier', 0) or getattr(user, 'tier', 0)
+        if current_tier > 2:
+            current_tier = 2
+
+        # Define limits aligned with Paystack/CBN progressive architecture
+        if current_tier == 2:
+            circle_limit = 500000
+            max_balance = "Unlimited"
+        elif current_tier == 1:
+            circle_limit = 100000
+            max_balance = "₦300,000"
+        else:
+            circle_limit = 10000
+            max_balance = "₦50,000"
+
         return Response({
-            "kyc_status": user.kyc_status,
-            "kyc_tier": user.kyc_tier,
-            "max_contribution_limit": user.max_contribution_limit,
-            "is_verified": user.kyc_status == 'verified'
+            "kyc_status": "verified" if current_tier > 0 else "unverified",
+            "kyc_tier": current_tier,
+            "tier": current_tier,
+            "max_contribution_limit": circle_limit,
+            "circle_entry_limit": circle_limit,
+            "max_balance": max_balance,
+            "is_verified": current_tier > 0,
+            "has_bvn_verified": profile.has_bvn_verified,
+            "has_nin_verified": profile.has_nin_verified,
+            "address_verified": profile.address_verified,
+            "face_verified": profile.face_verified,
+            "phone_number": getattr(user, 'phone_number', '')
         }, status=status.HTTP_200_OK) 
         
 class UserProfileView(APIView):
