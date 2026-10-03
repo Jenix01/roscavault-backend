@@ -373,7 +373,7 @@ class MyMembershipsView(generics.ListAPIView):
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
-        # Augment items with collection turn metadata
+        # Augment items with collection turn metadata and dues progress
         for item in response.data:
             membership_id = item.get('id')
             payout = PayoutSchedule.objects.filter(member_id=membership_id).first()
