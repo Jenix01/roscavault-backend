@@ -669,7 +669,7 @@ class MyStatsView(APIView):
             grade = 'A'
             rating_label = 'Elite Saver'
             max_circle_limit = Decimal('500000.00')
-        elif score >= 75:
+        elif score >= 70:
             grade = 'B'
             rating_label = 'Reliable'
             max_circle_limit = Decimal('100000.00')
@@ -949,7 +949,6 @@ class CreateContributionGroupView(APIView):
         print(f"==========================================\n")
 
         # 2. STRICT TIER 2 ENFORCEMENT
-        # Resolve highest detected tier:
         effective_tier = max(
             int(user_tier or 0), 
             int(user_kyc_tier or 0), 
@@ -966,11 +965,11 @@ class CreateContributionGroupView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # 3. STRICT TRUST SCORE ENFORCEMENT (>= 80)
-        if int(trust_score or 0) < 80:
+        # 3. STRICT TRUST SCORE ENFORCEMENT (>= 70)
+        if int(trust_score or 0) < 70:
             return Response(
                 {
-                    "detail": f"Creator Eligibility: A minimum Trust Score of 80 is required to manage an Ajo circle. Your current score is {trust_score}%.",
+                    "detail": f"Creator Eligibility: A minimum Trust Score of 70 is required to manage an Ajo circle. Your current score is {trust_score}%.",
                     "requires_trust_score": True,
                     "current_score": trust_score
                 },
@@ -983,6 +982,19 @@ class CreateContributionGroupView(APIView):
         max_members = int(request.data.get('max_members', 5))
         cycle_frequency = request.data.get('cycle_frequency', 'monthly')
         join_as_member = request.data.get('join_as_member', False)
+        
+        # Creator determines the starting day (defaults to today if not provided)
+        start_date_str = request.data.get('start_date')
+        if start_date_str:
+            try:
+                start_date = timezone.datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {"detail": "Invalid start_date format. Use YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            start_date = timezone.now().date()
 
         if not name or not amount:
             return Response(
@@ -997,6 +1009,7 @@ class CreateContributionGroupView(APIView):
                 amount=amount,
                 max_members=max_members,
                 cycle_frequency=cycle_frequency,
+                start_date=start_date, # Allows creator to determine starting day
                 is_active=True
             )
 
@@ -1012,7 +1025,8 @@ class CreateContributionGroupView(APIView):
         return Response(
             {
                 "detail": "Circle created successfully.",
-                "group_id": group.id
+                "group_id": group.id,
+                "start_date": str(group.start_date)
             },
             status=status.HTTP_201_CREATED
         )
@@ -1061,6 +1075,7 @@ class CreatorGroupManagementDetailsView(APIView):
                 "amount": float(group.amount),
                 "max_members": group.max_members,
                 "cycle_frequency": group.cycle_frequency,
+                "start_date": str(group.start_date) if hasattr(group, 'start_date') and group.start_date else None, # Added start_date response
                 "is_active": group.is_active,
             },
             "members": members_data,
