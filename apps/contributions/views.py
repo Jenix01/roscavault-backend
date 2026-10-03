@@ -785,6 +785,30 @@ class ConfigurePayoutInvestmentView(APIView):
             "detail": f"Payout investment allocation updated to {percentage_dec}%.",
             "investment_percentage": str(payout.investment_percentage)
         }, status=status.HTTP_200_OK)
+        
+class ConfigurePayoutDestinationView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, payout_id):
+        try:
+            payout = get_object_or_404(PayoutSchedule, id=payout_id, user=request.user)
+            destination = request.data.get('destination', 'wallet')
+            percentage = float(request.data.get('percentage', 100))
+
+            payout.destination = destination
+            payout.investment_percentage = percentage
+            payout.status = 'configured'
+            payout.save()
+
+            return Response(
+                {"detail": f"Payout successfully routed {percentage}% to your {destination}."},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class UserStatsView(APIView):
