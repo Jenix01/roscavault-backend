@@ -93,18 +93,25 @@ class JoinContributionGroupView(generics.CreateAPIView):
         if group.memberships.count() >= group.max_members:
             return Response({"detail": "Sorry, this AJO group is already at maximum capacity."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 1. Find the lowest available slot number (Gap-filling logic)
+        # 1. Find all already taken slots (including creator's chosen slot / pre-scheduled turns)
         existing_positions = GroupMembership.objects.filter(
             group=group, status='approved'
         ).values_list('current_cycle_number', flat=True)
 
+        scheduled_positions = PayoutSchedule.objects.filter(
+            group=group
+        ).values_list('cycle_number', flat=True)
+
+        taken_slots = set(list(existing_positions) + list(scheduled_positions))
+
+        # Find the lowest available slot number that isn't taken by the creator or other members
         assigned_slot = 1
         for i in range(1, group.max_members + 1):
-            if i not in existing_positions:
+            if i not in taken_slots:
                 assigned_slot = i
                 break
 
-        # 2. Create Membership with the correct gap-filled slot
+        # 2. Create Membership with the correct unique slot
         membership = GroupMembership.objects.create(
             user=request.user,
             group=group,
@@ -115,7 +122,7 @@ class JoinContributionGroupView(generics.CreateAPIView):
             next_deadline=timezone.now()
         )
 
-        # 3. Schedule Payout matching the exact assigned slot
+        # 3. Schedule Payout matching the exact assigned unique slot
         days_offset = 1 if group.cycle_frequency == 'daily' else (7 if group.cycle_frequency == 'weekly' else 30)
         
         # 2% Alajo fee calculation (Net Pot = 98%)

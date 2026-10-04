@@ -125,7 +125,7 @@ class GroupMembership(AbstractBaseModel):
             self.next_deadline += timedelta(weeks=1)
         elif self.group.cycle_frequency == 'monthly':
             self.next_deadline += timedelta(days=30) 
-        self.save()
+        self.save(update_fields=['current_cycle_number', 'next_deadline'])
 
     def __str__(self):
         return f"{self.user.email} - {self.group.name} ({self.status})"
