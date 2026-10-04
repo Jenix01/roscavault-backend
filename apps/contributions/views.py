@@ -134,6 +134,17 @@ class JoinContributionGroupView(generics.CreateAPIView):
             }
         )
 
+        # 4. Trigger notification for user activity feed
+        try:
+            from apps.users.models import Notification
+            Notification.objects.create(
+                user=request.user,
+                title="Circle Joined 🎉",
+                message=f"You have successfully joined '{group.name}' at Slot #{assigned_slot}."
+            )
+        except Exception:
+            pass
+
         serializer = self.get_serializer(membership)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -178,7 +189,7 @@ class CreateTransactionView(generics.CreateAPIView):
 class WalletContributionView(APIView):
     """
     Deducts cycle dues from member's wallet, records transaction,
-    and disburses pot (95% to recipient, 5% fee to Alajo) once all members pay.
+    and disburses pot (98% to recipient, 2% fee to Alajo) once all members pay.
     """
     permission_classes = [IsAuthenticated]
 
@@ -217,6 +228,17 @@ class WalletContributionView(APIView):
             notes=f"Cycle #{current_cycle} contribution for {group.name}"
         )
 
+        # Trigger notification for user activity feed
+        try:
+            from apps.users.models import Notification
+            Notification.objects.create(
+                user=request.user,
+                title="Contribution Settled ✓",
+                message=f"Your dues for Cycle #{current_cycle} in '{group.name}' were successfully paid from your wallet."
+            )
+        except Exception:
+            pass
+
         paid_members_count = Transaction.objects.filter(
             membership__group=group,
             cycle_number=current_cycle,
@@ -238,10 +260,10 @@ class WalletContributionView(APIView):
                 alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
 
                 gross_pot = group.amount * group.max_members
-                alajo_fee = (gross_pot * Decimal('0.05')).quantize(Decimal('0.01'))
+                alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
                 net_payout = gross_pot - alajo_fee
 
-                # Disburse 95% to Turn Winner
+                # Disburse 98% to Turn Winner
                 winner_wallet.balance += net_payout
                 winner_wallet.save(update_fields=['balance'])
 
@@ -256,10 +278,20 @@ class WalletContributionView(APIView):
                     cycle_number=current_cycle,
                     reference=f"POT-{group.id}-C{current_cycle}-{uuid.uuid4().hex[:6].upper()}",
                     status='successful',
-                    notes=f"Net Ajo Pot Payout (Cycle #{current_cycle}) - 5% Alajo fee deducted"
+                    notes=f"Net Ajo Pot Payout (Cycle #{current_cycle}) - 2% Alajo fee deducted"
                 )
 
-                # Disburse 5% to Alajo (Creator)
+                # Notify winner of payout
+                try:
+                    Notification.objects.create(
+                        user=winner,
+                        title="Payout Received 🎉",
+                        message=f"Your payout of ₦{net_payout} for Cycle #{current_cycle} in '{group.name}' has been processed."
+                    )
+                except Exception:
+                    pass
+
+                # Disburse 2% to Alajo (Creator)
                 alajo_wallet.balance += alajo_fee
                 alajo_wallet.save(update_fields=['balance'])
 
@@ -269,7 +301,7 @@ class WalletContributionView(APIView):
                     cycle_number=current_cycle,
                     reference=f"ALAJO-FEE-{group.id}-C{current_cycle}-{uuid.uuid4().hex[:6].upper()}",
                     status='successful',
-                    notes=f"5% Alajo commission for {group.name} (Cycle #{current_cycle})"
+                    notes=f"2% Alajo commission for {group.name} (Cycle #{current_cycle})"
                 )
 
                 pot_disbursed = True
@@ -1120,3 +1152,50 @@ class CreatorGroupManagementDetailsView(APIView):
                 {"detail": str(e), "traceback": error_trace},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+            
+class CircleApplicantsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, group_id):
+        try:
+            group = get_object_or_404(ContributionGroup, id=group_id)
+            
+            # Verify creator/admin access
+            if group.creator != request.user and not GroupMembership.objects.filter(group=group, user=request.user, role='admin').exists():
+                return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
+
+            pending_applicants = GroupMembership.objects.filter(group=group, status='pending')
+            serializer = GroupMembershipSerializer(pending_applicants, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    def post(self, request, group_id):
+        """Approve or reject an applicant"""
+        try:
+            group = get_object_or_404(ContributionGroup, id=group_id)
+            membership_id = request.data.get('membership_id')
+            action = request.data.get('action') # 'approve' or 'reject'
+
+            membership = get_object_or_404(GroupMembership, id=membership_id, group=group)
+
+            if action == 'approve':
+                membership.status = 'approved'
+                membership.save()
+                
+                # Create a notification for the user
+                from apps.users.models import Notification # adjust import if your Notification model is elsewhere
+                Notification.objects.create(
+                    user=membership.user,
+                    title="Circle Application Approved! 🎉",
+                    message=f"Your request to join '{group.name}' has been approved by the host."
+                )
+
+                return Response({"detail": "Applicant approved successfully."}, status=status.HTTP_200_OK)
+            elif action == 'reject':
+                membership.delete()
+                return Response({"detail": "Applicant rejected."}, status=status.HTTP_200_OK)
+            
+            return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
