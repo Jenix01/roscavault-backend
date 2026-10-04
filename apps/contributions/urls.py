@@ -18,6 +18,7 @@ from .views import (
     UserMembershipsAPIView,
     MyStatsView,
     ExploreGroupsView,
+    CircleApplicantsView,
     MyPayoutsView,
     ConfigurePayoutDestinationView
 )
@@ -42,6 +43,8 @@ urlpatterns = [
     path('explore/', ExploreGroupsView.as_view(), name='explore-groups'),
     path('explore-groups/', ExploreGroupsView.as_view(), name='explore-groups-alias'),
     path('payment/callback/', PaymentCallbackView.as_view(), name='payment-callback'),
+    path('groups/<uuid:group_id>/applicants/', CircleApplicantsView.as_view(), name='circle-applicants'),
+    path('groups/<int:group_id>/applicants/', CircleApplicantsView.as_view(), name='circle-applicants-int'),
 
     # Group Actions (Direct, Prefixed, UUID & Integer Support)
     path('<uuid:group_id>/join/', JoinContributionGroupView.as_view(), name='join-group-direct'),
