@@ -45,6 +45,8 @@ urlpatterns = [
     path('payment/callback/', PaymentCallbackView.as_view(), name='payment-callback'),
     path('groups/<uuid:group_id>/applicants/', CircleApplicantsView.as_view(), name='circle-applicants'),
     path('groups/<int:group_id>/applicants/', CircleApplicantsView.as_view(), name='circle-applicants-int'),
+    path('memberships/<uuid:membership_id>/review/', CircleApplicantsView.as_view(), name='membership-review'),
+    path('memberships/<int:membership_id>/review/', CircleApplicantsView.as_view(), name='membership-review-int'),
 
     # Group Actions (Direct, Prefixed, UUID & Integer Support)
     path('<uuid:group_id>/join/', JoinContributionGroupView.as_view(), name='join-group-direct'),
