@@ -816,10 +816,12 @@ class TriggerAutomatedCycleView(APIView):
         details_log = []
 
         active_groups = ContributionGroup.objects.filter(is_active=True)
+        details_log.append(f"Found {active_groups.count()} active groups to process at {now}.")
 
         for group in active_groups:
             try:
                 active_memberships = group.memberships.filter(is_active=True, status='approved')
+                details_log.append(f"Group '{group.name}' has {active_memberships.count()} active approved memberships.")
                 
                 # Step A: Auto-deduct dues for members who haven't paid for their current cycle
                 for membership in active_memberships:
@@ -829,12 +831,15 @@ class TriggerAutomatedCycleView(APIView):
                         status='successful'
                     ).exists()
 
+                    details_log.append(f"Member {membership.user.email} (Cycle #{membership.current_cycle_number}): has_paid={has_paid}, deadline={membership.next_deadline}, now={now}")
+
                     if not has_paid:
                         if membership.next_deadline and membership.next_deadline <= now:
                             user = membership.user
                             try:
                                 wallet = Wallet.objects.select_for_update().get(user=user)
                                 amount_due = group.amount
+                                details_log.append(f"Attempting deduction: Wallet balance is ₦{wallet.balance}, Dues amount: ₦{amount_due}")
 
                                 if wallet.balance >= amount_due:
                                     wallet.balance -= amount_due
@@ -862,9 +867,13 @@ class TriggerAutomatedCycleView(APIView):
                                         pass
 
                                     deductions_count += 1
-                                    details_log.append(f"Auto-deducted ₦{amount_due} from {user.email} for group {group.name}")
+                                    details_log.append(f"SUCCESS: Auto-deducted ₦{amount_due} from {user.email}")
+                                else:
+                                    details_log.append(f"SKIPPED deduction: Insufficient wallet balance for {user.email}")
                             except Wallet.DoesNotExist:
-                                pass
+                                details_log.append(f"SKIPPED deduction: Wallet not found for {user.email}")
+                        else:
+                            details_log.append(f"SKIPPED deduction: Deadline not reached yet for {membership.user.email}")
 
                 # Step B: Process Payout Schedule for current or past-due cycles
                 pending_schedules = PayoutSchedule.objects.filter(
@@ -872,6 +881,8 @@ class TriggerAutomatedCycleView(APIView):
                     status='pending',
                     expected_payout_date__lte=today
                 ).select_related('member', 'member__user')
+
+                details_log.append(f"Found {pending_schedules.count()} pending payout schedules with date <= {today}")
 
                 for pending_schedule in pending_schedules:
                     cycle_num = pending_schedule.cycle_number
@@ -881,6 +892,8 @@ class TriggerAutomatedCycleView(APIView):
                         cycle_number=cycle_num,
                         status='successful'
                     ).count()
+
+                    details_log.append(f"Payout Cycle #{cycle_num}: paid_count={paid_count}, required={active_memberships.count()}")
 
                     # Disburse if all members have paid their dues
                     if paid_count >= active_memberships.count():
@@ -894,7 +907,6 @@ class TriggerAutomatedCycleView(APIView):
 
                         invest_pct = Decimal(str(getattr(pending_schedule, 'investment_percentage', 0))) / Decimal('100')
 
-                        # Handle vault investment vs wallet payout safely
                         if invest_pct > 0:
                             vault_amount = net_payout * invest_pct
                             wallet_amount = net_payout - vault_amount
@@ -903,7 +915,6 @@ class TriggerAutomatedCycleView(APIView):
                                 winner_wallet.balance += wallet_amount
                                 winner_wallet.save(update_fields=['balance'])
 
-                            vault_credited = False
                             try:
                                 from apps.contributions.models import InvestmentVault
                                 InvestmentVault.objects.create(
@@ -911,11 +922,7 @@ class TriggerAutomatedCycleView(APIView):
                                     payout_source=pending_schedule,
                                     principal_amount=vault_amount
                                 )
-                                vault_credited = True
                             except Exception:
-                                pass
-
-                            if not vault_credited:
                                 winner_wallet.balance += vault_amount
                                 winner_wallet.save(update_fields=['balance'])
                         else:
@@ -966,7 +973,9 @@ class TriggerAutomatedCycleView(APIView):
                             group.save(update_fields=['is_active'])
 
                         payouts_count += 1
-                        details_log.append(f"Disbursed pot for Cycle #{cycle_num} in group {group.name}")
+                        details_log.append(f"SUCCESS: Disbursed pot for Cycle #{cycle_num} in group {group.name}")
+                    else:
+                        details_log.append(f"SKIPPED payout for Cycle #{cycle_num}: Waiting for all member dues to be paid ({paid_count}/{active_memberships.count()}).")
 
             except Exception as e:
                 details_log.append(f"Error processing group {group.name}: {str(e)}")
