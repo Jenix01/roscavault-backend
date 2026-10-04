@@ -905,10 +905,12 @@ class TriggerAutomatedCycleView(APIView):
 
                             vault_credited = False
                             try:
-                                from apps.vault.models import VaultAccount
-                                vault_acc, _ = VaultAccount.objects.get_or_create(user=winner)
-                                vault_acc.balance += vault_amount
-                                vault_acc.save(update_fields=['balance'])
+                                from apps.contributions.models import InvestmentVault
+                                InvestmentVault.objects.create(
+                                    user=winner,
+                                    payout_source=pending_schedule,
+                                    principal_amount=vault_amount
+                                )
                                 vault_credited = True
                             except Exception:
                                 pass
