@@ -811,7 +811,7 @@ class TriggerAutomatedCycleView(APIView):
         """
         1. Auto-syncs all memberships to match the active pending cycle.
         2. Auto-deducts dues from member wallets if deadline has passed.
-        3. Disburses payouts immediately when cycle dues are complete (ignoring calendar date limits).
+        3. Disburses payouts immediately when cycle dues are complete, respecting user investment/vault preferences.
         """
         now = timezone.now()
         today = now.date()
@@ -913,29 +913,34 @@ class TriggerAutomatedCycleView(APIView):
                         alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
                         net_payout = gross_pot - alajo_fee
 
+                        # Respect user's investment/vault allocation preference
                         invest_pct = Decimal(str(getattr(pending_schedule, 'investment_percentage', 0))) / Decimal('100')
+                        if invest_pct == 0 and hasattr(pending_schedule.member, 'investment_percentage'):
+                            invest_pct = Decimal(str(pending_schedule.member.investment_percentage)) / Decimal('100')
 
-                        if invest_pct > 0:
-                            vault_amount = net_payout * invest_pct
-                            wallet_amount = net_payout - vault_amount
-                            
-                            if wallet_amount > 0:
-                                winner_wallet.balance += wallet_amount
-                                winner_wallet.save(update_fields=['balance'])
+                        vault_amount = (net_payout * invest_pct).quantize(Decimal('0.01'))
+                        wallet_amount = net_payout - vault_amount
 
+                        # 1. Route to Investment Vault if user chose to invest part/all
+                        if vault_amount > 0:
                             try:
                                 from apps.contributions.models import InvestmentVault
                                 InvestmentVault.objects.create(
                                     user=winner,
                                     payout_source=pending_schedule,
-                                    principal_amount=vault_amount
+                                    principal_amount=vault_amount,
+                                    is_active=True
                                 )
-                            except Exception:
-                                winner_wallet.balance += vault_amount
-                                winner_wallet.save(update_fields=['balance'])
-                        else:
-                            winner_wallet.balance += net_payout
+                                details_log.append(f"SUCCESS: Locked ₦{vault_amount} into Investment Vault for {winner.email}")
+                            except Exception as e:
+                                details_log.append(f"Vault creation error: {str(e)}, fallback to wallet")
+                                wallet_amount = net_payout # Fallback all to wallet if vault creation fails
+
+                        # 2. Route the remaining balance directly to the user's cash wallet
+                        if wallet_amount > 0:
+                            winner_wallet.balance += wallet_amount
                             winner_wallet.save(update_fields=['balance'])
+                            details_log.append(f"SUCCESS: Credited ₦{wallet_amount} directly to cash wallet for {winner.email}")
 
                         pending_schedule.status = 'paid'
                         pending_schedule.payout_amount = net_payout
