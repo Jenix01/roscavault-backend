@@ -766,14 +766,13 @@ class ExploreGroupsView(generics.ListAPIView):
 
 class TriggerAutomatedCycleView(APIView):
     """
-    Executes circle deductions, processes past-due payouts, 
+    Executes automatic wallet dues deductions, processes past-due payouts, 
     and acts as a keep-alive endpoint for cron-job.org.
     """
     permission_classes = [AllowAny]
 
     def get(self, request):
         """Lightweight keep-alive ping and automated trigger for cron-job.org GET requests."""
-        # Optional: Allow cron-job.org to also trigger via GET if configured that way
         cron_key = request.headers.get('X-CRON-KEY') or request.GET.get('key')
         expected_key = getattr(settings, 'CRON_SECRET_KEY', getattr(settings, 'SECRET_KEY', None))
 
@@ -799,112 +798,169 @@ class TriggerAutomatedCycleView(APIView):
 
     @db_transaction.atomic
     def _process_cycles_logic(self):
-        """Core logic to process past-due payouts and advance rotation turns."""
-        today = timezone.now().date()
-        processed_count = 0
+        """
+        1. Auto-deducts dues from member wallets if deadline has passed and they haven't paid.
+        2. Disburses payouts when cycle dues are complete or payout date is reached.
+        """
+        now = timezone.now()
+        today = now.date()
+        deductions_count = 0
+        payouts_count = 0
         details_log = []
 
-        # Find all pending payouts where the expected date is today or in the past
-        due_schedules = PayoutSchedule.objects.filter(
-            status='pending',
-            expected_payout_date__lte=today,
-            group__is_active=True
-        ).select_related('group', 'member', 'member__user')
+        active_groups = ContributionGroup.objects.filter(is_active=True)
 
-        for schedule in due_schedules:
-            group = schedule.group
-            current_cycle = schedule.cycle_number
-            winner = schedule.member.user
-
+        for group in active_groups:
             try:
-                winner_wallet = Wallet.objects.select_for_update().get(user=winner)
-                alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
+                active_memberships = group.memberships.filter(is_active=True, status='approved')
+                
+                # Step A: Auto-deduct dues for members who haven't paid for their current cycle
+                for membership in active_memberships:
+                    has_paid = Transaction.objects.filter(
+                        membership=membership,
+                        cycle_number=membership.current_cycle_number,
+                        status='successful'
+                    ).exists()
 
-                gross_pot = group.amount * group.max_members
-                alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
-                net_payout = gross_pot - alajo_fee
+                    if not has_paid:
+                        if membership.next_deadline and membership.next_deadline <= now:
+                            user = membership.user
+                            try:
+                                wallet = Wallet.objects.select_for_update().get(user=user)
+                                amount_due = group.amount
 
-                invest_pct = Decimal(str(getattr(schedule, 'investment_percentage', 0))) / Decimal('100')
+                                if wallet.balance >= amount_due:
+                                    wallet.balance -= amount_due
+                                    wallet.save(update_fields=['balance'])
 
-                # Handle reinvestment allocation or standard wallet payout
-                if invest_pct > 0:
-                    vault_amount = net_payout * invest_pct
-                    wallet_amount = net_payout - vault_amount
+                                    ref = f"AUTO-AJO-{group.id}-C{membership.current_cycle_number}-U{user.id}-{uuid.uuid4().hex[:6].upper()}"
+                                    Transaction.objects.create(
+                                        membership=membership,
+                                        user=user,
+                                        amount=amount_due,
+                                        cycle_number=membership.current_cycle_number,
+                                        reference=ref,
+                                        status='successful',
+                                        notes=f"Automatic wallet deduction for Cycle #{membership.current_cycle_number} in {group.name}"
+                                    )
+
+                                    try:
+                                        from apps.users.models import Notification
+                                        Notification.objects.create(
+                                            user=user,
+                                            title="Automatic Dues Deduction ✓",
+                                            message=f"₦{amount_due} was automatically deducted from your wallet for Cycle #{membership.current_cycle_number} in '{group.name}'."
+                                        )
+                                    except Exception:
+                                        pass
+
+                                    deductions_count += 1
+                                    details_log.append(f"Auto-deducted ₦{amount_due} from {user.email} for group {group.name}")
+                            except Wallet.DoesNotExist:
+                                pass
+
+                # Step B: Process Payout Schedule for current or past-due cycles
+                pending_schedule = PayoutSchedule.objects.filter(
+                    group=group,
+                    status='pending',
+                    expected_payout_date__lte=today
+                ).select_related('member', 'member__user').first()
+
+                if pending_schedule:
+                    cycle_num = pending_schedule.cycle_number
                     
-                    if wallet_amount > 0:
-                        winner_wallet.balance += wallet_amount
-                        winner_wallet.save(update_fields=['balance'])
+                    paid_count = Transaction.objects.filter(
+                        membership__group=group,
+                        cycle_number=cycle_num,
+                        status='successful'
+                    ).count()
 
-                    try:
-                        from apps.vault.models import VaultAccount
-                        vault_acc, _ = VaultAccount.objects.get_or_create(user=winner)
-                        vault_acc.balance += vault_amount
-                        vault_acc.save(update_fields=['balance'])
-                    except Exception:
-                        winner_wallet.balance += vault_amount
-                        winner_wallet.save(update_fields=['balance'])
-                else:
-                    winner_wallet.balance += net_payout
-                    winner_wallet.save(update_fields=['balance'])
+                    # Disburse if all members have paid their dues
+                    if paid_count >= active_memberships.count():
+                        winner = pending_schedule.member.user
+                        winner_wallet = Wallet.objects.select_for_update().get(user=winner)
+                        alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
 
-                # Update schedule status
-                schedule.status = 'paid'
-                schedule.payout_amount = net_payout
-                schedule.save(update_fields=['status', 'payout_amount'])
+                        gross_pot = group.amount * group.max_members
+                        alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
+                        net_payout = gross_pot - alajo_fee
 
-                # Record payout transaction
-                Transaction.objects.create(
-                    membership=schedule.member,
-                    user=winner,
-                    amount=net_payout,
-                    cycle_number=current_cycle,
-                    reference=f"POT-{group.id}-C{current_cycle}-{uuid.uuid4().hex[:6].upper()}",
-                    status='successful',
-                    notes=f"Auto-disbursed Net Pot Payout (Cycle #{current_cycle})"
-                )
+                        invest_pct = Decimal(str(getattr(pending_schedule, 'investment_percentage', 0))) / Decimal('100')
 
-                # Disburse 2% Alajo Commission
-                alajo_wallet.balance += alajo_fee
-                alajo_wallet.save(update_fields=['balance'])
+                        # Handle vault investment vs wallet payout
+                        if invest_pct > 0:
+                            vault_amount = net_payout * invest_pct
+                            wallet_amount = net_payout - vault_amount
+                            
+                            if wallet_amount > 0:
+                                winner_wallet.balance += wallet_amount
+                                winner_wallet.save(update_fields=['balance'])
 
-                Transaction.objects.create(
-                    user=group.creator,
-                    amount=alajo_fee,
-                    cycle_number=current_cycle,
-                    reference=f"ALAJO-FEE-{group.id}-C{current_cycle}-{uuid.uuid4().hex[:6].upper()}",
-                    status='successful',
-                    notes=f"2% Alajo commission for {group.name} (Cycle #{current_cycle})"
-                )
+                            try:
+                                from apps.vault.models import VaultAccount
+                                vault_acc, _ = VaultAccount.objects.get_or_create(user=winner)
+                                vault_acc.balance += vault_amount
+                                vault_acc.save(update_fields=['balance'])
+                            except Exception:
+                                winner_wallet.balance += vault_amount
+                                winner_wallet.save(update_fields=['balance'])
+                        else:
+                            winner_wallet.balance += net_payout
+                            winner_wallet.save(update_fields=['balance'])
 
-                # Send Notification
-                try:
-                    from apps.users.models import Notification
-                    Notification.objects.create(
-                        user=winner,
-                        title="Payout Disbursed 🎉",
-                        message=f"Your payout of ₦{net_payout} for Cycle #{current_cycle} in '{group.name}' has been successfully processed."
-                    )
-                except Exception:
-                    pass
+                        pending_schedule.status = 'paid'
+                        pending_schedule.payout_amount = net_payout
+                        pending_schedule.save(update_fields=['status', 'payout_amount'])
 
-                # Advance memberships
-                for m in group.memberships.filter(is_active=True):
-                    m.current_cycle_number += 1
-                    m.save(update_fields=['current_cycle_number'])
+                        Transaction.objects.create(
+                            membership=pending_schedule.member,
+                            user=winner,
+                            amount=net_payout,
+                            cycle_number=cycle_num,
+                            reference=f"POT-{group.id}-C{cycle_num}-{uuid.uuid4().hex[:6].upper()}",
+                            status='successful',
+                            notes=f"Net Pot Payout (Cycle #{cycle_num}) - 2% Alajo fee deducted"
+                        )
 
-                if current_cycle >= group.max_members:
-                    group.is_active = False
-                    group.save(update_fields=['is_active'])
+                        alajo_wallet.balance += alajo_fee
+                        alajo_wallet.save(update_fields=['balance'])
 
-                processed_count += 1
-                details_log.append(f"Processed Cycle #{current_cycle} for group {group.name}")
+                        Transaction.objects.create(
+                            user=group.creator,
+                            amount=alajo_fee,
+                            cycle_number=cycle_num,
+                            reference=f"ALAJO-FEE-{group.id}-C{cycle_num}-{uuid.uuid4().hex[:6].upper()}",
+                            status='successful',
+                            notes=f"2% Alajo commission for {group.name} (Cycle #{cycle_num})"
+                        )
+
+                        try:
+                            from apps.users.models import Notification
+                            Notification.objects.create(
+                                user=winner,
+                                title="Payout Disbursed 🎉",
+                                message=f"Your payout of ₦{net_payout} for Cycle #{cycle_num} in '{group.name}' has been processed."
+                            )
+                        except Exception:
+                            pass
+
+                        for m in active_memberships:
+                            m.advance_to_next_cycle()
+
+                        if cycle_num >= group.max_members:
+                            group.is_active = False
+                            group.save(update_fields=['is_active'])
+
+                        payouts_count += 1
+                        details_log.append(f"Disbursed pot for Cycle #{cycle_num} in group {group.name}")
 
             except Exception as e:
-                details_log.append(f"Error on group {group.name}: {str(e)}")
+                details_log.append(f"Error processing group {group.name}: {str(e)}")
 
         return {
-            "detail": f"Cycle check executed successfully. Processed {processed_count} past-due payouts.",
-            "processed_count": processed_count,
+            "detail": f"Cycle check executed. Deductions: {deductions_count}, Payouts: {payouts_count}.",
+            "deductions_count": deductions_count,
+            "payouts_count": payouts_count,
             "logs": details_log
         }
 
