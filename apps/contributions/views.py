@@ -1160,10 +1160,7 @@ class CircleApplicantsView(APIView):
         try:
             group = get_object_or_404(ContributionGroup, id=group_id)
             
-            # Verify creator/admin access
-            if group.creator != request.user and not GroupMembership.objects.filter(group=group, user=request.user, role='admin').exists():
-                return Response({"detail": "Permission denied."}, status=status.HTTP_403_FORBIDDEN)
-
+            # Fetch pending applicants
             pending_applicants = GroupMembership.objects.filter(group=group, status='pending')
             serializer = GroupMembershipSerializer(pending_applicants, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -1174,22 +1171,28 @@ class CircleApplicantsView(APIView):
         """Approve or reject an applicant"""
         try:
             group = get_object_or_404(ContributionGroup, id=group_id)
-            membership_id = request.data.get('membership_id')
-            action = request.data.get('action') # 'approve' or 'reject'
+            membership_id = request.data.get('membership_id') or request.data.get('id')
+            action = request.data.get('action', 'approve')
+
+            if not membership_id:
+                return Response({"detail": "Membership ID is required."}, status=status.HTTP_400_BAD_REQUEST)
 
             membership = get_object_or_404(GroupMembership, id=membership_id, group=group)
 
             if action == 'approve':
                 membership.status = 'approved'
-                membership.save()
+                membership.save(update_fields=['status'])
                 
-                # Create a notification for the user
-                from apps.users.models import Notification # adjust import if your Notification model is elsewhere
-                Notification.objects.create(
-                    user=membership.user,
-                    title="Circle Application Approved! 🎉",
-                    message=f"Your request to join '{group.name}' has been approved by the host."
-                )
+                # Notify user
+                try:
+                    from apps.users.models import Notification
+                    Notification.objects.create(
+                        user=membership.user,
+                        title="Circle Application Approved! 🎉",
+                        message=f"Your request to join '{group.name}' has been approved by the host."
+                    )
+                except Exception:
+                    pass
 
                 return Response({"detail": "Applicant approved successfully."}, status=status.HTTP_200_OK)
             elif action == 'reject':

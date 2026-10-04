@@ -25,6 +25,7 @@ class ContributionGroupSerializer(serializers.ModelSerializer):
 
 class GroupMembershipSerializer(serializers.ModelSerializer):
     user_email = serializers.ReadOnlyField(source='user.email')
+    user_name = serializers.SerializerMethodField()
     group_name = serializers.ReadOnlyField(source='group.name')
     group = ContributionGroupSerializer(read_only=True)
     
@@ -39,6 +40,7 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
             'id',
             'group',
             'role',
+            'status',
             'current_cycle_number',
             'assigned_cycle_number',
             'expected_collection_date',
