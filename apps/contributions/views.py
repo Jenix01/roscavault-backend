@@ -809,9 +809,9 @@ class TriggerAutomatedCycleView(APIView):
     @db_transaction.atomic
     def _process_cycles_logic(self):
         """
-        1. Auto-syncs all memberships to ensure uniform cycle tracking.
+        1. Auto-syncs all memberships to match the active pending cycle.
         2. Auto-deducts dues from member wallets if deadline has passed.
-        3. Disburses payouts when cycle dues are complete.
+        3. Disburses payouts immediately when cycle dues are complete (ignoring calendar date limits).
         """
         now = timezone.now()
         today = now.date()
@@ -824,13 +824,13 @@ class TriggerAutomatedCycleView(APIView):
 
         for group in active_groups:
             try:
-                # AUTO-HEAL: Ensure all approved memberships in this group are synchronized to cycle 1 (or active cycle)
-                group.memberships.filter(is_active=True, status='approved').update(current_cycle_number=1)
+                # AUTO-HEAL: Ensure all approved memberships in this group match the pending schedule's cycle number
+                next_schedule = group.payout_schedules.filter(status='pending').order_by('cycle_number').first()
+                target_cycle = next_schedule.cycle_number if next_schedule else 1
+                group.memberships.filter(is_active=True, status='approved').update(current_cycle_number=target_cycle)
 
                 active_memberships = group.memberships.filter(is_active=True, status='approved')
-                details_log.append(f"Group '{group.name}' has {active_memberships.count()} active approved memberships (synchronized).")
-                
-                # ... rest of your deduction and payout logic ...
+                details_log.append(f"Group '{group.name}' has {active_memberships.count()} active approved memberships (synchronized to cycle #{target_cycle}).")
                 
                 # Step A: Auto-deduct dues for members who haven't paid for their current cycle
                 for membership in active_memberships:
@@ -884,14 +884,13 @@ class TriggerAutomatedCycleView(APIView):
                         else:
                             details_log.append(f"SKIPPED deduction: Deadline not reached yet for {membership.user.email}")
 
-                # Step B: Process Payout Schedule for current or past-due cycles
+                # Step B: Process Payout Schedule for current or past-due cycles (Date restriction removed)
                 pending_schedules = PayoutSchedule.objects.filter(
                     group=group,
-                    status='pending',
-                    expected_payout_date__lte=today
+                    status='pending'
                 ).select_related('member', 'member__user')
 
-                details_log.append(f"Found {pending_schedules.count()} pending payout schedules with date <= {today}")
+                details_log.append(f"Found {pending_schedules.count()} pending payout schedules for group {group.name}")
 
                 for pending_schedule in pending_schedules:
                     cycle_num = pending_schedule.cycle_number
@@ -904,8 +903,8 @@ class TriggerAutomatedCycleView(APIView):
 
                     details_log.append(f"Payout Cycle #{cycle_num}: paid_count={paid_count}, required={active_memberships.count()}")
 
-                    # Disburse if all members have paid their dues
-                    if paid_count >= active_memberships.count():
+                    # Disburse immediately if all members have paid their dues
+                    if paid_count >= active_memberships.count() and active_memberships.count() > 0:
                         winner = pending_schedule.member.user
                         winner_wallet = Wallet.objects.select_for_update().get(user=winner)
                         alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
