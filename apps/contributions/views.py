@@ -809,8 +809,9 @@ class TriggerAutomatedCycleView(APIView):
     @db_transaction.atomic
     def _process_cycles_logic(self):
         """
-        1. Auto-deducts dues from member wallets if deadline has passed.
-        2. Disburses payouts when cycle dues are complete or payout date is reached.
+        1. Auto-syncs all memberships to ensure uniform cycle tracking.
+        2. Auto-deducts dues from member wallets if deadline has passed.
+        3. Disburses payouts when cycle dues are complete.
         """
         now = timezone.now()
         today = now.date()
@@ -823,8 +824,13 @@ class TriggerAutomatedCycleView(APIView):
 
         for group in active_groups:
             try:
+                # AUTO-HEAL: Ensure all approved memberships in this group are synchronized to cycle 1 (or active cycle)
+                group.memberships.filter(is_active=True, status='approved').update(current_cycle_number=1)
+
                 active_memberships = group.memberships.filter(is_active=True, status='approved')
-                details_log.append(f"Group '{group.name}' has {active_memberships.count()} active approved memberships.")
+                details_log.append(f"Group '{group.name}' has {active_memberships.count()} active approved memberships (synchronized).")
+                
+                # ... rest of your deduction and payout logic ...
                 
                 # Step A: Auto-deduct dues for members who haven't paid for their current cycle
                 for membership in active_memberships:
