@@ -894,7 +894,7 @@ class TriggerAutomatedCycleView(APIView):
 
                         invest_pct = Decimal(str(getattr(pending_schedule, 'investment_percentage', 0))) / Decimal('100')
 
-                        # Handle vault investment vs wallet payout
+                        # Handle vault investment vs wallet payout safely
                         if invest_pct > 0:
                             vault_amount = net_payout * invest_pct
                             wallet_amount = net_payout - vault_amount
@@ -903,12 +903,17 @@ class TriggerAutomatedCycleView(APIView):
                                 winner_wallet.balance += wallet_amount
                                 winner_wallet.save(update_fields=['balance'])
 
+                            vault_credited = False
                             try:
                                 from apps.vault.models import VaultAccount
                                 vault_acc, _ = VaultAccount.objects.get_or_create(user=winner)
                                 vault_acc.balance += vault_amount
                                 vault_acc.save(update_fields=['balance'])
+                                vault_credited = True
                             except Exception:
+                                pass
+
+                            if not vault_credited:
                                 winner_wallet.balance += vault_amount
                                 winner_wallet.save(update_fields=['balance'])
                         else:
