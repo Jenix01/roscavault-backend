@@ -799,7 +799,7 @@ class TriggerAutomatedCycleView(APIView):
     @db_transaction.atomic
     def _process_cycles_logic(self):
         """
-        1. Auto-deducts dues from member wallets if deadline has passed and they haven't paid.
+        1. Auto-deducts dues from member wallets if deadline has passed.
         2. Disburses payouts when cycle dues are complete or payout date is reached.
         """
         now = timezone.now()
@@ -860,13 +860,13 @@ class TriggerAutomatedCycleView(APIView):
                                 pass
 
                 # Step B: Process Payout Schedule for current or past-due cycles
-                pending_schedule = PayoutSchedule.objects.filter(
+                pending_schedules = PayoutSchedule.objects.filter(
                     group=group,
                     status='pending',
                     expected_payout_date__lte=today
-                ).select_related('member', 'member__user').first()
+                ).select_related('member', 'member__user')
 
-                if pending_schedule:
+                for pending_schedule in pending_schedules:
                     cycle_num = pending_schedule.cycle_number
                     
                     paid_count = Transaction.objects.filter(
@@ -963,7 +963,6 @@ class TriggerAutomatedCycleView(APIView):
             "payouts_count": payouts_count,
             "logs": details_log
         }
-
 
 class ConfigurePayoutInvestmentView(APIView):
     permission_classes = [IsAuthenticated]
