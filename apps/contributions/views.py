@@ -181,12 +181,15 @@ class CreateTransactionView(generics.CreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Automatically bind cycle number, user, and mark as successful so the background worker counts it
         tx = Transaction.objects.create(
             membership=membership,
+            user=request.user,
             amount=amount,
+            cycle_number=membership.current_cycle_number,
             reference=reference,
             notes=notes,
-            status='pending'
+            status='successful'
         )
 
         serializer = self.get_serializer(tx)
