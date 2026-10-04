@@ -29,7 +29,6 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
     group_name = serializers.ReadOnlyField(source='group.name')
     group = ContributionGroupSerializer(read_only=True)
     
-    # Collection turn milestones
     assigned_cycle_number = serializers.SerializerMethodField()
     expected_collection_date = serializers.SerializerMethodField()
     dues_paid_count = serializers.SerializerMethodField()
@@ -48,8 +47,15 @@ class GroupMembershipSerializer(serializers.ModelSerializer):
             'next_deadline',
             'is_active',
             'user_email',
+            'user_name',  # <--- MUST BE HERE
             'group_name',
         ]
+
+    def get_user_name(self, obj):
+        if obj.user:
+            full_name = f"{obj.user.first_name} {obj.user.last_name}".strip()
+            return full_name if full_name else obj.user.email
+        return "Participant"
 
     def get_assigned_cycle_number(self, obj):
         payout = PayoutSchedule.objects.filter(member=obj).first()

@@ -765,25 +765,148 @@ class ExploreGroupsView(generics.ListAPIView):
 
 
 class TriggerAutomatedCycleView(APIView):
+    """
+    Executes circle deductions, processes past-due payouts, 
+    and acts as a keep-alive endpoint for cron-job.org.
+    """
     permission_classes = [AllowAny]
 
     def get(self, request):
-        """Lightweight keep-alive ping for cron-job.org."""
+        """Lightweight keep-alive ping and automated trigger for cron-job.org GET requests."""
+        # Optional: Allow cron-job.org to also trigger via GET if configured that way
+        cron_key = request.headers.get('X-CRON-KEY') or request.GET.get('key')
+        expected_key = getattr(settings, 'CRON_SECRET_KEY', getattr(settings, 'SECRET_KEY', None))
+
+        if cron_key and expected_key and cron_key == expected_key:
+            results = self._process_cycles_logic()
+            return Response({"status": "executed", "results": results}, status=status.HTTP_200_OK)
+
         return Response({
             "status": "active",
-            "message": "ROSCAVault background worker is awake."
+            "message": "ROSCAVault background worker is awake and online."
         }, status=status.HTTP_200_OK)
 
     def post(self, request):
-        """Executes circle deductions and handles background tasks."""
+        """Executes circle deductions and handles background tasks via POST."""
         cron_key = request.headers.get('X-CRON-KEY')
         expected_key = getattr(settings, 'CRON_SECRET_KEY', getattr(settings, 'SECRET_KEY', None))
 
         if cron_key and expected_key and cron_key != expected_key:
             return Response({"detail": "Unauthorized cron trigger."}, status=status.HTTP_403_FORBIDDEN)
 
-        results = process_due_circle_deductions()
+        results = self._process_cycles_logic()
         return Response(results, status=status.HTTP_200_OK)
+
+    @db_transaction.atomic
+    def _process_cycles_logic(self):
+        """Core logic to process past-due payouts and advance rotation turns."""
+        today = timezone.now().date()
+        processed_count = 0
+        details_log = []
+
+        # Find all pending payouts where the expected date is today or in the past
+        due_schedules = PayoutSchedule.objects.filter(
+            status='pending',
+            expected_payout_date__lte=today,
+            group__is_active=True
+        ).select_related('group', 'member', 'member__user')
+
+        for schedule in due_schedules:
+            group = schedule.group
+            current_cycle = schedule.cycle_number
+            winner = schedule.member.user
+
+            try:
+                winner_wallet = Wallet.objects.select_for_update().get(user=winner)
+                alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
+
+                gross_pot = group.amount * group.max_members
+                alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
+                net_payout = gross_pot - alajo_fee
+
+                invest_pct = Decimal(str(getattr(schedule, 'investment_percentage', 0))) / Decimal('100')
+
+                # Handle reinvestment allocation or standard wallet payout
+                if invest_pct > 0:
+                    vault_amount = net_payout * invest_pct
+                    wallet_amount = net_payout - vault_amount
+                    
+                    if wallet_amount > 0:
+                        winner_wallet.balance += wallet_amount
+                        winner_wallet.save(update_fields=['balance'])
+
+                    try:
+                        from apps.vault.models import VaultAccount
+                        vault_acc, _ = VaultAccount.objects.get_or_create(user=winner)
+                        vault_acc.balance += vault_amount
+                        vault_acc.save(update_fields=['balance'])
+                    except Exception:
+                        winner_wallet.balance += vault_amount
+                        winner_wallet.save(update_fields=['balance'])
+                else:
+                    winner_wallet.balance += net_payout
+                    winner_wallet.save(update_fields=['balance'])
+
+                # Update schedule status
+                schedule.status = 'paid'
+                schedule.payout_amount = net_payout
+                schedule.save(update_fields=['status', 'payout_amount'])
+
+                # Record payout transaction
+                Transaction.objects.create(
+                    membership=schedule.member,
+                    user=winner,
+                    amount=net_payout,
+                    cycle_number=current_cycle,
+                    reference=f"POT-{group.id}-C{current_cycle}-{uuid.uuid4().hex[:6].upper()}",
+                    status='successful',
+                    notes=f"Auto-disbursed Net Pot Payout (Cycle #{current_cycle})"
+                )
+
+                # Disburse 2% Alajo Commission
+                alajo_wallet.balance += alajo_fee
+                alajo_wallet.save(update_fields=['balance'])
+
+                Transaction.objects.create(
+                    user=group.creator,
+                    amount=alajo_fee,
+                    cycle_number=current_cycle,
+                    reference=f"ALAJO-FEE-{group.id}-C{current_cycle}-{uuid.uuid4().hex[:6].upper()}",
+                    status='successful',
+                    notes=f"2% Alajo commission for {group.name} (Cycle #{current_cycle})"
+                )
+
+                # Send Notification
+                try:
+                    from apps.users.models import Notification
+                    Notification.objects.create(
+                        user=winner,
+                        title="Payout Disbursed 🎉",
+                        message=f"Your payout of ₦{net_payout} for Cycle #{current_cycle} in '{group.name}' has been successfully processed."
+                    )
+                except Exception:
+                    pass
+
+                # Advance memberships
+                for m in group.memberships.filter(is_active=True):
+                    m.current_cycle_number += 1
+                    m.save(update_fields=['current_cycle_number'])
+
+                if current_cycle >= group.max_members:
+                    group.is_active = False
+                    group.save(update_fields=['is_active'])
+
+                processed_count += 1
+                details_log.append(f"Processed Cycle #{current_cycle} for group {group.name}")
+
+            except Exception as e:
+                details_log.append(f"Error on group {group.name}: {str(e)}")
+
+        return {
+            "detail": f"Cycle check executed successfully. Processed {processed_count} past-due payouts.",
+            "processed_count": processed_count,
+            "logs": details_log
+        }
 
 
 class ConfigurePayoutInvestmentView(APIView):
