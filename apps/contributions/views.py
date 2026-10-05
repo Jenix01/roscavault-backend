@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework import status, permissions
 
-from .models import ContributionGroup, GroupMembership, Transaction, PayoutSchedule
+from .models import ContributionGroup, GroupMembership, Transaction, PayoutSchedule, InvestmentVault
 from users.models import Wallet, UserKYCProfile
 from .services import process_due_circle_deductions
 from .serializers import (
@@ -811,7 +811,8 @@ class TriggerAutomatedCycleView(APIView):
         """
         1. Auto-syncs all memberships to match the active pending cycle.
         2. Auto-deducts dues from member wallets if deadline has passed.
-        3. Disburses payouts immediately when cycle dues are complete, respecting user investment/vault preferences.
+        3. Halts completed payout cycles at 'awaiting_choice' so users can interactively 
+           choose to withdraw to wallet or lock in Wealth Engine Vault with terms & maturity dates.
         """
         now = timezone.now()
         today = now.date()
@@ -884,7 +885,7 @@ class TriggerAutomatedCycleView(APIView):
                         else:
                             details_log.append(f"SKIPPED deduction: Deadline not reached yet for {membership.user.email}")
 
-                # Step B: Process Payout Schedule for current or past-due cycles (Date restriction removed)
+                # Step B: Process Payout Schedule for current or past-due cycles
                 pending_schedules = PayoutSchedule.objects.filter(
                     group=group,
                     status='pending'
@@ -903,90 +904,27 @@ class TriggerAutomatedCycleView(APIView):
 
                     details_log.append(f"Payout Cycle #{cycle_num}: paid_count={paid_count}, required={active_memberships.count()}")
 
-                    # Disburse immediately if all members have paid their dues
+                    # Trigger interactive claim state if all members have paid their dues
                     if paid_count >= active_memberships.count() and active_memberships.count() > 0:
                         winner = pending_schedule.member.user
-                        winner_wallet = Wallet.objects.select_for_update().get(user=winner)
-                        alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
 
-                        gross_pot = group.amount * group.max_members
-                        alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
-                        net_payout = gross_pot - alajo_fee
+                        # Pause automated disbursement and set state to awaiting winner's choice
+                        pending_schedule.status = 'awaiting_choice'
+                        pending_schedule.save(update_fields=['status'])
 
-                        # Respect user's investment/vault allocation preference
-                        invest_pct = Decimal(str(getattr(pending_schedule, 'investment_percentage', 0))) / Decimal('100')
-                        if invest_pct == 0 and hasattr(pending_schedule.member, 'investment_percentage'):
-                            invest_pct = Decimal(str(pending_schedule.member.investment_percentage)) / Decimal('100')
-
-                        vault_amount = (net_payout * invest_pct).quantize(Decimal('0.01'))
-                        wallet_amount = net_payout - vault_amount
-
-                        # 1. Route to Investment Vault if user chose to invest part/all
-                        if vault_amount > 0:
-                            try:
-                                from apps.contributions.models import InvestmentVault
-                                InvestmentVault.objects.create(
-                                    user=winner,
-                                    payout_source=pending_schedule,
-                                    principal_amount=vault_amount,
-                                    is_active=True
-                                )
-                                details_log.append(f"SUCCESS: Locked ₦{vault_amount} into Investment Vault for {winner.email}")
-                            except Exception as e:
-                                details_log.append(f"Vault creation error: {str(e)}, fallback to wallet")
-                                wallet_amount = net_payout # Fallback all to wallet if vault creation fails
-
-                        # 2. Route the remaining balance directly to the user's cash wallet
-                        if wallet_amount > 0:
-                            winner_wallet.balance += wallet_amount
-                            winner_wallet.save(update_fields=['balance'])
-                            details_log.append(f"SUCCESS: Credited ₦{wallet_amount} directly to cash wallet for {winner.email}")
-
-                        pending_schedule.status = 'paid'
-                        pending_schedule.payout_amount = net_payout
-                        pending_schedule.save(update_fields=['status', 'payout_amount'])
-
-                        Transaction.objects.create(
-                            membership=pending_schedule.member,
-                            user=winner,
-                            amount=net_payout,
-                            cycle_number=cycle_num,
-                            reference=f"POT-{group.id}-C{cycle_num}-{uuid.uuid4().hex[:6].upper()}",
-                            status='successful',
-                            notes=f"Net Pot Payout (Cycle #{cycle_num}) - 2% Alajo fee deducted"
-                        )
-
-                        alajo_wallet.balance += alajo_fee
-                        alajo_wallet.save(update_fields=['balance'])
-
-                        Transaction.objects.create(
-                            user=group.creator,
-                            amount=alajo_fee,
-                            cycle_number=cycle_num,
-                            reference=f"ALAJO-FEE-{group.id}-C{cycle_num}-{uuid.uuid4().hex[:6].upper()}",
-                            status='successful',
-                            notes=f"2% Alajo commission for {group.name} (Cycle #{cycle_num})"
-                        )
-
+                        # Send notification prompting user to choose between cash wallet or vault lock with terms
                         try:
                             from apps.users.models import Notification
                             Notification.objects.create(
                                 user=winner,
-                                title="Payout Disbursed 🎉",
-                                message=f"Your payout of ₦{net_payout} for Cycle #{cycle_num} in '{group.name}' has been processed."
+                                title="Action Required: Claim Your Payout 🎉",
+                                message=f"Your payout for Cycle #{cycle_num} in '{group.name}' is fully funded! Open the app to choose whether to withdraw to your cash wallet or lock it in your Wealth Engine Vault with your target maturity date."
                             )
                         except Exception:
                             pass
 
-                        for m in active_memberships:
-                            m.advance_to_next_cycle()
-
-                        if cycle_num >= group.max_members:
-                            group.is_active = False
-                            group.save(update_fields=['is_active'])
-
                         payouts_count += 1
-                        details_log.append(f"SUCCESS: Disbursed pot for Cycle #{cycle_num} in group {group.name}")
+                        details_log.append(f"SUCCESS: Payout for Cycle #{cycle_num} in group {group.name} set to awaiting_choice for {winner.email}")
                     else:
                         details_log.append(f"SKIPPED payout for Cycle #{cycle_num}: Waiting for all member dues to be paid ({paid_count}/{active_memberships.count()}).")
 
@@ -994,12 +932,12 @@ class TriggerAutomatedCycleView(APIView):
                 details_log.append(f"Error processing group {group.name}: {str(e)}")
 
         return {
-            "detail": f"Cycle check executed. Deductions: {deductions_count}, Payouts: {payouts_count}.",
+            "detail": f"Cycle check executed. Deductions: {deductions_count}, Payouts Awaiting Choice: {payouts_count}.",
             "deductions_count": deductions_count,
             "payouts_count": payouts_count,
             "logs": details_log
         }
-
+        
 class ConfigurePayoutInvestmentView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1416,3 +1354,69 @@ class CircleApplicantsView(APIView):
             return Response({"detail": "Invalid action."}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        class ClaimPayoutView(APIView):
+            permission_classes = [IsAuthenticated]
+
+    def post(self, request, schedule_id):
+        try:
+            schedule = PayoutSchedule.objects.get(id=schedule_id, status='awaiting_choice')
+            
+            # Ensure the requesting user is the winner of this schedule
+            if schedule.member.user != request.user:
+                return Response({"detail": "Unauthorized."}, status=403)
+
+            choice = request.data.get('choice') # 'wallet' or 'vault'
+            maturity_date = request.data.get('maturity_date') # Required if vault
+            terms_accepted = request.data.get('terms_accepted', False) # Boolean
+
+            if choice == 'vault' and not terms_accepted:
+                return Response({"detail": "You must accept the terms and conditions to lock funds in the vault."}, status=400)
+
+            group = schedule.group
+            winner_wallet = Wallet.objects.select_for_update().get(user=request.user)
+            alajo_wallet = Wallet.objects.select_for_update().get(user=group.creator)
+
+            gross_pot = group.amount * group.max_members
+            alajo_fee = (gross_pot * Decimal('0.02')).quantize(Decimal('0.01'))
+            net_payout = gross_pot - alajo_fee
+
+            if choice == 'vault':
+                # Route to Wealth Engine Vault with custom date & terms
+                InvestmentVault.objects.create(
+                    user=request.user,
+                    payout_source=schedule,
+                    principal_amount=net_payout,
+                    maturity_date=maturity_date,
+                    terms_accepted=True,
+                    is_active=True
+                )
+                note_text = f"Wealth Engine Vault Lock (Cycle #{schedule.cycle_number}) - Maturity: {maturity_date}"
+            else:
+                # Route directly to cash wallet
+                winner_wallet.balance += net_payout
+                winner_wallet.save(update_fields=['balance'])
+                note_text = f"Net Pot Payout (Cycle #{schedule.cycle_number}) - Withdrawn to wallet"
+
+            # Deduct Alajo Fee and credit creator
+            alajo_wallet.balance += alajo_fee
+            alajo_wallet.save(update_fields=['balance'])
+
+            # Mark schedule as fully paid/completed
+            schedule.status = 'paid'
+            schedule.payout_amount = net_payout
+            schedule.save(update_fields=['status', 'payout_amount'])
+
+            # Advance group cycle / rotation
+            active_memberships = group.memberships.filter(is_active=True, status='approved')
+            for m in active_memberships:
+                m.advance_to_next_cycle()
+
+            if schedule.cycle_number >= group.max_members:
+                group.is_active = False
+                group.save(update_fields=['is_active'])
+
+            return Response({"detail": "Payout claimed successfully!", "net_payout": str(net_payout)})
+
+        except PayoutSchedule.DoesNotExist:
+            return Response({"detail": "Payout schedule not found or already claimed."}, status=404)
